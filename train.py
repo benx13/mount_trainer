@@ -16,7 +16,6 @@ def main(args):
     model, image_size, description = build_model(
         net_id=args.net_id,
         pretrained=True,
-        num_classes=2  # binary classification: human vs no-human
     )
     print(f"Loaded model: {args.net_id}")
     print(f"Image size: {image_size}")
