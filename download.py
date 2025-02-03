@@ -38,154 +38,167 @@ def configure_fast_downloads():
     os.environ["TRANSFORMERS_CACHE"] = "/tmp/huggingface/transformers"
     os.environ["HF_DATASETS_CACHE"] = "/tmp/huggingface/datasets"
 
+def calculate_box_area_percentage(box, image_size):
+    """
+    Calculate the area of a bounding box as a percentage of the image area.
+    
+    Args:
+        box: List of [x1, y1, x2, y2] coordinates
+        image_size: Tuple of (width, height)
+    
+    Returns:
+        float: Area percentage (0-100)
+    """
+
+    
+    image_area = image_size[0] * image_size[1]
+    return (box / image_area) * 100
+
 def load_and_save_shard(
-    dataset_name,
-    split,
-    target_images_per_shard,
+    dataset_name="Harvard-Edge/Wake-Vision-Train-Large",
+    split="train_large",
+    target_images_per_shard=100,
     shard_id=0,
     relabel_json_path=None,
     confidence_threshold=0.55,
-    min_box_area=5000,  # Now this is absolute area in pixels
+    min_box_area_percentage=5.0,
     dual_save=False
 ):
     """
-    Load and save dataset with flexible saving options:
-    - No relabel_json_path: Save original labels only
-    - relabel_json_path provided: Save relabeled version only
-    - relabel_json_path and dual_save=True: Save both versions
+    Load and save a specific shard of the Wake Vision dataset to disk with optional relabeling.
     
     Args:
         dataset_name (str): Name of the dataset on Hugging Face
-        split (str): Split to use
+        split (str): Dataset split to use
         target_images_per_shard (int): Target number of images per shard
-        shard_id (int): ID of the shard to process
-        relabel_json_path (str, optional): Path to JSON file containing relabeling data
-        confidence_threshold (float): Confidence threshold for detections
-        min_box_area (float): Minimum box area in pixels
-        dual_save (bool): If True and relabel_json_path is provided, save both versions
+        shard_id (int): Which shard to process
+        relabel_json_path (str, optional): Path to relabeling JSON file. If None, uses original labels
+        confidence_threshold (float): Confidence threshold for person detection
+        min_box_area_percentage (float): Minimum box area as percentage of image size
+        dual_save (bool): If True and relabel_json_path is provided, save both original and relabeled versions
+    
+    Returns:
+        str or tuple: Path to saved dataset directory, or tuple of (original_dir, relabeled_dir) if dual_save=True
     """
-    # Configure download settings
-    configure_fast_downloads()
-    
-    # Load dataset
-    logger.info(f"Loading dataset: {dataset_name}, split: {split}")
-    dataset = load_dataset(dataset_name, split=split, streaming=True)
-    
-    # Determine save mode
-    save_original = not relabel_json_path or dual_save
-    save_relabeled = relabel_json_path is not None
-    
-    # Set up directory names
-    base_dir = f"shard_{shard_id}_human_vs_nohuman"
-    if save_relabeled and not save_original:
-        # Only saving relabeled version
-        output_dir = f"{base_dir}_relabeled"
-    elif save_original and save_relabeled:
-        # Saving both versions
-        original_dir = base_dir
-        relabeled_dir = f"{base_dir}_relabeled"
-    else:
-        # Only saving original version
-        output_dir = base_dir
-    
-    # Create directories
-    if save_original and save_relabeled:
-        for label in ['human', 'no-human']:
-            os.makedirs(os.path.join(original_dir, label), exist_ok=True)
-            os.makedirs(os.path.join(relabeled_dir, label), exist_ok=True)
-    else:
-        for label in ['human', 'no-human']:
-            os.makedirs(os.path.join(output_dir, label), exist_ok=True)
-    
-    # Load relabeling data if needed
+    # Load relabeling data if path is provided
     relabel_data = {}
-    if save_relabeled:
-        if not os.path.exists(relabel_json_path):
-            raise FileNotFoundError(f"Relabel JSON file not found: {relabel_json_path}")
-        with open(relabel_json_path, 'r') as f:
-            relabel_data = json.load(f)
-        logger.info(f"Loaded relabeling data from {relabel_json_path}")
+    use_relabeling = relabel_json_path is not None
+    if use_relabeling:
+        try:
+            with open(relabel_json_path, 'r') as f:
+                relabel_data = json.load(f)
+            print(f"Loaded relabeling data from {relabel_json_path}")
+        except FileNotFoundError:
+            print(f"Warning: Relabeling file {relabel_json_path} not found. Using original labels.")
+            use_relabeling = False
+
+    # Get dataset size (total number of images in dataset)
+    total_examples = 5760428
     
-    # Statistics counters
-    stats = {
-        'processed_images': 0,
-        'relabeled_images': 0,
-        'flipped_labels': 0,
-        'small_detections_ignored': 0,
-        'missing_relabel_data': 0
-    }
+    # Calculate the number of shards needed
+    num_shards = total_examples // target_images_per_shard
+    if total_examples % target_images_per_shard != 0:
+        num_shards += 1
+
+    print(f"Dataset has {total_examples} examples. Using {num_shards} shards with ~{target_images_per_shard} images per shard.")
+    print(f"Using {'relabeled' if use_relabeling else 'original'} labels")
+
+    # Load the dataset in streaming mode
+    token = get_token()
+    if token is None:
+        raise ValueError("Please login to Hugging Face using `huggingface-cli login` first")
+
+    configure_fast_downloads()
+    dataset = load_dataset(dataset_name, split=split, streaming=True, token=token)
     
-    # Process images
-    for i, example in enumerate(dataset):
-        if i < shard_id * target_images_per_shard:
-            continue
-        if i >= (shard_id + 1) * target_images_per_shard:
+    # Shard the dataset
+    sharded_dataset = dataset.shard(num_shards=num_shards, index=shard_id)
+
+    # Create directories to save images
+    base_dir = f"shard_{shard_id}_human_vs_nohuman"
+    original_shard_dir = f"{base_dir}_original" if dual_save else base_dir
+    relabeled_shard_dir = f"{base_dir}_relabeled" if dual_save else base_dir
+    
+    # Create subdirectories for both versions
+    if dual_save or not use_relabeling:
+        for label in ['human', 'no-human']:
+            os.makedirs(os.path.join(original_shard_dir, label), exist_ok=True)
+    if use_relabeling:
+        for label in ['human', 'no-human']:
+            os.makedirs(os.path.join(relabeled_shard_dir, label), exist_ok=True)
+
+    # Stats for reporting
+    relabeled_count = 0
+    total_count = 0
+    flipped_labels = 0
+    small_person_count = 0
+
+    # Iterate over the shard and download images
+    for i, item in enumerate(sharded_dataset):
+        if i >= target_images_per_shard:
             break
+
+        img = item['image']
+        filename = item['filename']
+        original_label = item['person']
+        
+        # Determine label based on whether we're using relabeling
+        if use_relabeling:# and filename in relabel_data:
             
-        image = example['image']
-        original_label = 'human' if example['label'] == 1 else 'no-human'
-        image_id = example.get('image_id', str(i))
-        
-        # Save original version if needed
-        if save_original:
-            save_path = os.path.join(original_dir if save_relabeled else output_dir, 
-                                   original_label, f"{image_id}.jpg")
-            image.save(save_path)
-        
-        # Process and save relabeled version if needed
-        if save_relabeled:
-            if image_id in relabel_data:
-                stats['relabeled_images'] += 1
-                detections = relabel_data[image_id]
-                
-                # Check if any detection meets criteria
-                valid_detection = False
-                for det in detections:
-                    confidence = det.get('c', 0)  # Using 'c' for confidence
-                    area = det.get('b', 0)  # Using 'b' for box area
-                    
-                    if confidence >= confidence_threshold:
-                        if area >= min_box_area:
-                            valid_detection = True
-                            break
-                        else:
-                            stats['small_detections_ignored'] += 1
-                
-                # Set label based on valid detections
-                relabeled_label = 'human' if valid_detection else 'no-human'
-                if relabeled_label != original_label:
-                    stats['flipped_labels'] += 1
-            else:
-                stats['missing_relabel_data'] += 1
-                relabeled_label = original_label
+            new_label = 0  # Default to no-human
+            image_data = relabel_data[filename]
+            #if 'objects' in image_data:
+            for obj in image_data:
+                if obj['c'] > confidence_threshold:
+                    # Calculate box area percentage
+                    area_percentage = calculate_box_area_percentage(obj['b'], img.size)
+                    if area_percentage >= min_box_area_percentage:
+                        new_label = 1
+                        relabeled_count += 1
+                        break
+                    else:
+                        small_person_count += 1
+                        print(f"Person detected in {filename} but box too small ({area_percentage:.2f}% < {min_box_area_percentage}%)")
             
-            # Save relabeled version
-            save_path = os.path.join(relabeled_dir if save_original else output_dir,
-                                   relabeled_label, f"{image_id}.jpg")
-            image.save(save_path)
-        
-        stats['processed_images'] += 1
-        if stats['processed_images'] % 100 == 0:
-            logger.info(f"Processed {stats['processed_images']} images...")
-    
-    # Log statistics
-    logger.info("\nDataset Processing Statistics:")
-    logger.info(f"Total images processed: {stats['processed_images']}")
-    if save_relabeled:
-        logger.info(f"Images with relabel data: {stats['relabeled_images']}")
-        logger.info(f"Labels flipped: {stats['flipped_labels']}")
-        logger.info(f"Small detections ignored: {stats['small_detections_ignored']}")
-        logger.info(f"Images missing relabel data: {stats['missing_relabel_data']}")
-    
-    # Return appropriate paths based on save mode
-    if save_original and save_relabeled:
-        logger.info(f"\nSaved both versions:")
-        logger.info(f"Original labels: {original_dir}")
-        logger.info(f"Relabeled version: {relabeled_dir}")
-        return original_dir, relabeled_dir
+            if new_label != original_label:
+                flipped_labels += 1
+                print(f"Label flipped for {filename}: {original_label} -> {new_label}")
+        else:
+            # Use original label if not relabeling or no relabel data for this image
+            new_label = original_label
+            if use_relabeling:
+                print(f"Warning: No relabeling data found for {filename}, using original label: {original_label}")
+
+        # Save original version
+        if dual_save or not use_relabeling:
+            original_path = os.path.join(original_shard_dir, 'human' if original_label == 1 else 'no-human', filename)
+            img.save(original_path)
+
+        # Save relabeled version
+        if use_relabeling:
+            relabeled_path = os.path.join(relabeled_shard_dir, 'human' if new_label == 1 else 'no-human', filename)
+            img.save(relabeled_path)
+
+        total_count += 1
+        if i % 10 == 0:
+            print(f"Saved {i+1} images... (Last: {filename}, Label: {'human' if new_label == 1 else 'no-human'})")
+
+    # Print final statistics
+    print(f"\nProcessing complete for shard {shard_id}:")
+    print(f"Total images processed: {total_count}")
+    if use_relabeling:
+        print(f"Images with relabeling data: {relabeled_count}")
+        print(f"Labels flipped: {flipped_labels}")
+        print(f"Small person detections ignored: {small_person_count}")
+    print(f"Shard saved to:")
+    if dual_save:
+        print(f"Original labels: {original_shard_dir}")
+        print(f"Relabeled version: {relabeled_shard_dir}")
+        return original_shard_dir, relabeled_shard_dir
     else:
-        logger.info(f"\nSaved to: {output_dir}")
-        return output_dir
+        saved_dir = original_shard_dir
+        print(f"Directory: {saved_dir}")
+        return saved_dir
 
 if __name__ == '__main__':
     # Example usage with relabeling
@@ -195,7 +208,7 @@ if __name__ == '__main__':
         target_images_per_shard=100, 
         shard_id=0,
         confidence_threshold=0.55,
-        min_box_area=5000,
+        min_box_area_percentage=5.0,
         relabel_json_path='/Users/benx13/code/edge_ai_modelcentric/results_new/results/shard_0/images_0-5000.json',
         dual_save=True
     )
