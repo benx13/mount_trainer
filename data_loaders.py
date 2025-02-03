@@ -4,7 +4,7 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import numpy as np
 import os
-from .datasets import AlbumentationsDataset, TransformWrapper
+from datasets import AlbumentationsDataset, TransformWrapper
 
 def create_data_loaders(
     data_dir,

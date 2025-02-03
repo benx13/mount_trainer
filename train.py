@@ -2,10 +2,10 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from data_loaders import create_data_loaders
+from mcunet.data_loaders import create_data_loaders
 from mcunet.model_zoo import build_model
 import argparse
-from trainer import train_model
+from mcunet.trainer import train_model
 
 def main(args):
     # Set device
