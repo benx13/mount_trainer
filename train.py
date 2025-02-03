@@ -35,7 +35,10 @@ def main():
         input_shape=input_shape,
         batch_size=batch_size,
         use_relabeled_data=use_relabeled_data,
-        relabeled_dataset_csv=relabeled_dataset_csv
+        relabeled_dataset_csv=relabeled_dataset_csv,
+        num_proc=8,  # Number of processes for data loading
+        num_shards=1,  # Total number of shards to divide the dataset into
+        shard_id=0  # Shard ID to load (0-indexed)
     )
 
     # Load MCUNet model from model_zoo - using mcunet-vww2
