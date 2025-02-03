@@ -5,7 +5,7 @@ import torch.optim as optim
 from data_loaders import create_data_loaders
 from mcunet.model_zoo import build_model
 import argparse
-from trainer import Trainer
+from trainer import train_model
 
 def main(args):
     # Set device
@@ -38,8 +38,8 @@ def main(args):
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
 
-    # Create trainer
-    trainer = Trainer(
+    # Train the model using train_model function
+    best_val_accuracy, test_accuracy = train_model(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
@@ -47,23 +47,17 @@ def main(args):
         criterion=criterion,
         optimizer=optimizer,
         device=device,
-        checkpoint_dir=args.checkpoint_dir,
-        num_epochs=args.epochs
+        epochs=args.epochs,
+        output_dir=args.checkpoint_dir,
+        model_name=args.net_id,
+        net_id=args.net_id,
+        num_classes=2,
+        resume_training=args.resume_from is not None
     )
 
-    # Load checkpoint if provided
-    if args.resume_from:
-        trainer.load_checkpoint(args.resume_from)
-        print(f"Resumed training from checkpoint: {args.resume_from}")
-
-    # Train the model
-    trainer.train()
-
-    # Test the model
-    test_loss, test_acc = trainer.test()
-    print(f"\nFinal Test Results:")
-    print(f"Loss: {test_loss:.4f}")
-    print(f"Accuracy: {test_acc:.2f}%")
+    print(f"\nTraining completed!")
+    print(f"Best validation accuracy: {best_val_accuracy:.2f}%")
+    print(f"Test accuracy: {test_accuracy:.2f}%")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train MCUNet model on Wake Vision dataset")
@@ -81,7 +75,7 @@ if __name__ == "__main__":
                       help="Fraction of data to use for testing")
     
     # Training arguments
-    parser.add_argument("--batch_size", type=int, default=512,
+    parser.add_argument("--batch_size", type=int, default=32,
                       help="Batch size for training")
     parser.add_argument("--epochs", type=int, default=100,
                       help="Number of epochs to train")
