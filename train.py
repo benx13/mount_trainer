@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from data_loaders import create_data_loaders
-from mcunet.model_zoo import get_specialized_network
+from mcunet.model_zoo import build_model
 import argparse
 from trainer import Trainer
 
@@ -12,14 +12,16 @@ def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # Create model
-    model = get_specialized_network(
-        task='classification',
-        dataset='imagenet',
-        model_name='mcunet-320kb',
+    # Create model using build_model
+    model, image_size, description = build_model(
+        net_id=args.net_id,
         pretrained=True,
         num_classes=2  # binary classification: human vs no-human
     )
+    print(f"Loaded model: {args.net_id}")
+    print(f"Image size: {image_size}")
+    print(f"Description: {description}")
+    
     model = model.to(device)
 
     # Create data loaders
@@ -65,6 +67,10 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train MCUNet model on Wake Vision dataset")
+    
+    # Model arguments
+    parser.add_argument("--net_id", type=str, default="mcunet-vww2",
+                      help="Model ID from MCUNet model zoo")
     
     # Data arguments
     parser.add_argument("--data_dir", type=str, required=True,
