@@ -53,6 +53,7 @@ def main():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
+
     # Output directory for checkpoints
     output_dir = "./pytorch_checkpoints"
 
