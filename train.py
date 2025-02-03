@@ -31,7 +31,9 @@ def main(args):
         batch_size=args.batch_size,
         val_split=args.val_split,
         test_split=args.test_split,
-        seed=args.seed
+        seed=args.seed,
+        val_dir=args.val_dir,
+        test_dir=args.test_dir
     )
 
     # Define loss function and optimizer
@@ -68,11 +70,15 @@ if __name__ == "__main__":
     
     # Data arguments
     parser.add_argument("--data_dir", type=str, required=True,
-                      help="Directory containing the dataset in ImageNet format (human/no-human subdirs)")
+                      help="Directory containing the training dataset in ImageNet format (human/no-human subdirs)")
+    parser.add_argument("--val_dir", type=str,
+                      help="Optional directory containing validation dataset. If provided, val_split is ignored")
+    parser.add_argument("--test_dir", type=str,
+                      help="Optional directory containing test dataset. If provided, test_split is ignored")
     parser.add_argument("--val_split", type=float, default=0.1,
-                      help="Fraction of data to use for validation")
+                      help="Fraction of data to use for validation when val_dir is not provided")
     parser.add_argument("--test_split", type=float, default=0.1,
-                      help="Fraction of data to use for testing")
+                      help="Fraction of data to use for testing when test_dir is not provided")
     
     # Training arguments
     parser.add_argument("--batch_size", type=int, default=32,
@@ -91,6 +97,18 @@ if __name__ == "__main__":
                       help="Path to checkpoint to resume training from")
 
     args = parser.parse_args()
+    
+    # Validate directory arguments
+    if (args.val_dir and not args.test_dir) or (args.test_dir and not args.val_dir):
+        parser.error("If providing separate validation/test directories, both --val_dir and --test_dir must be specified")
+    
+    if args.val_dir and args.test_dir:
+        print("\nUsing separate directories for validation and test sets")
+        for dir_path in [args.val_dir, args.test_dir]:
+            if not os.path.exists(dir_path):
+                parser.error(f"Directory does not exist: {dir_path}")
+    else:
+        print("\nUsing splits from training directory for validation and test sets")
     
     # Create checkpoint directory if it doesn't exist
     os.makedirs(args.checkpoint_dir, exist_ok=True)
