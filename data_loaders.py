@@ -1,125 +1,108 @@
 import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms
-from download import load_wake_vision_dataset
+from torchvision.datasets import ImageFolder
+import os
 
 def create_data_loaders(
+    data_dir,
     input_shape, 
-    batch_size, 
-    use_relabeled_data=False, 
-    relabeled_dataset_csv='relabeled_dataset.csv',
-    num_proc=8,
-    num_shards=1,
-    shard_id=0
+    batch_size,
+    val_split=0.1,
+    test_split=0.1,
+    num_workers=None,
+    seed=42
 ):
     """
-    Creates data loaders for training, validation, and testing with preprocessing and augmentation.
+    Creates data loaders for training, validation, and testing using data from disk in ImageNet format.
+    Expects data_dir to have subdirectories 'human' and 'no-human'.
 
     Args:
-        input_shape (tuple): The desired input shape for images (height, width, channels).
-        batch_size (int): Batch size for data loaders.
-        use_relabeled_data (bool, optional): Whether to use relabeled data. Defaults to False.
-        relabeled_dataset_csv (str, optional): Path to the CSV file with relabeled data. Defaults to 'relabeled_dataset.csv'.
-        num_proc (int, optional): Number of processes for data loading. Defaults to 8.
-        num_shards (int, optional): Total number of shards to divide the dataset into. Defaults to 1.
-        shard_id (int, optional): Shard ID to load (0-indexed). Defaults to 0.
+        data_dir (str): Directory containing the dataset in ImageNet format
+        input_shape (tuple): The desired input shape for images (height, width, channels)
+        batch_size (int): Batch size for data loaders
+        val_split (float): Fraction of data to use for validation (default: 0.1)
+        test_split (float): Fraction of data to use for testing (default: 0.1)
+        num_workers (int, optional): Number of workers for data loading. If None, uses CPU count
+        seed (int): Random seed for reproducibility
 
     Returns:
-        tuple: (train_loader, val_loader, test_loader) - PyTorch DataLoaders for each split.
+        tuple: (train_loader, val_loader, test_loader) - PyTorch DataLoaders for each split
     """
+    if not os.path.exists(data_dir):
+        raise ValueError(f"Data directory {data_dir} does not exist")
 
-    # Load dataset using optimized loader from download.py
-    train_ds = load_wake_vision_dataset(
-        dataset_name="Harvard-Edge/Wake-Vision",
-        split='train_quality',
-        streaming=False,
-        num_proc=num_proc,
-        num_shards=num_shards,
-        shard_id=shard_id
-    )
+    # Data Preprocessing and Augmentation
+    data_transforms = {
+        'train': transforms.Compose([
+            transforms.Resize((input_shape[0], input_shape[1])),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomRotation(degrees=20),
+            transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
+            transforms.ToTensor(),
+        ]),
+        'val': transforms.Compose([
+            transforms.Resize((input_shape[0], input_shape[1])),
+            transforms.ToTensor(),
+        ])
+    }
+
+    # Load the full dataset
+    full_dataset = ImageFolder(data_dir, transform=data_transforms['val'])
     
-    val_ds = load_wake_vision_dataset(
-        dataset_name="Harvard-Edge/Wake-Vision",
-        split='validation',
-        streaming=False,
-        num_proc=num_proc,
-        num_shards=1,  # Don't shard validation set
-        shard_id=0
-    )
-    
-    test_ds = load_wake_vision_dataset(
-        dataset_name="Harvard-Edge/Wake-Vision",
-        split='test',
-        streaming=False,
-        num_proc=num_proc,
-        num_shards=1,  # Don't shard test set
-        shard_id=0
+    # Calculate split sizes
+    total_size = len(full_dataset)
+    val_size = int(val_split * total_size)
+    test_size = int(test_split * total_size)
+    train_size = total_size - val_size - test_size
+
+    # Split the dataset
+    torch.manual_seed(seed)
+    train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
+        full_dataset, 
+        [train_size, val_size, test_size]
     )
 
-    # Data Preprocessing and Augmentation - PyTorch/Torchvision style
-    data_preprocessing = transforms.Compose([
-        transforms.Resize((input_shape[0], input_shape[1])), # Resize images
-        transforms.ToTensor(), # Convert PIL Image to Tensor and normalize to [0, 1]
-    ])
+    # Apply transforms to each split
+    train_dataset.dataset.transform = data_transforms['train']
+    val_dataset.dataset.transform = data_transforms['val']
+    test_dataset.dataset.transform = data_transforms['val']
 
-    data_augmentation = transforms.Compose([
-        data_preprocessing,
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(degrees=20), # Slightly different rotation angle, adjust if needed to match Keras
-        # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) # Optional: ImageNet normalization if pretrained model expects it
-    ])
+    # Calculate appropriate number of workers if not specified
+    if num_workers is None:
+        num_workers = min(8, os.cpu_count() or 1)  # Use at most 8 workers
 
-    def transform_train(examples):
-        examples["image"] = [data_augmentation(image.convert("RGB")) for image in examples["image"]] # Convert to RGB
-        return examples
-
-    def transform_val_test(examples):
-        examples["image"] = [data_preprocessing(image.convert("RGB")) for image in examples["image"]] # Convert to RGB for val/test, no augmentation
-        return examples
-
-    train_ds.set_transform(transform_train)
-    val_ds.set_transform(transform_val_test)
-    test_ds.set_transform(transform_val_test)
-
-    def collate_fn(batch):
-        images = torch.stack([item['image'] for item in batch])
-        # --- MODIFIED LABEL LOADING ---
-        if use_relabeled_data:
-            # Assuming you have a way to map image filenames in batch to labels from relabeled_dataset_csv
-            # You'll need to implement the logic to load labels from your CSV based on filenames in the batch
-            # This is a placeholder - you'll need to adapt it to your CSV structure and loading method
-            print("Warning: Relabeled data usage is not fully implemented in collate_fn. You need to load labels from CSV here.")
-            labels = torch.tensor([item['person'] for item in batch], dtype=torch.long) # Placeholder: Replace with actual relabeled labels
-        else:
-            labels = torch.tensor([item['person'] for item in batch], dtype=torch.long) # Use original 'person' label
-        # --- END MODIFIED LABEL LOADING ---
-        return images, labels
-
+    # Create data loaders
     train_loader = DataLoader(
-        train_ds, 
+        train_dataset, 
         batch_size=batch_size, 
         shuffle=True, 
-        num_workers=num_proc,  # Match num_workers with num_proc
-        pin_memory=True, 
-        collate_fn=collate_fn
+        num_workers=num_workers,
+        pin_memory=True
     )
     
     val_loader = DataLoader(
-        val_ds, 
+        val_dataset, 
         batch_size=batch_size, 
         shuffle=False, 
-        num_workers=num_proc,  # Match num_workers with num_proc
-        pin_memory=True, 
-        collate_fn=collate_fn
+        num_workers=num_workers,
+        pin_memory=True
     )
     
     test_loader = DataLoader(
-        test_ds, 
-        batch_size=1,  # Batch size 1 for test as in Keras script
+        test_dataset, 
+        batch_size=batch_size,
         shuffle=False, 
-        num_workers=num_proc//2,  # Use fewer workers for test set
-        pin_memory=True, 
-        collate_fn=collate_fn
+        num_workers=max(1, num_workers//2),  # Use fewer workers for test set
+        pin_memory=True
     )
+
+    print(f"\nDataset splits:")
+    print(f"Total images: {total_size}")
+    print(f"Training: {train_size} images")
+    print(f"Validation: {val_size} images")
+    print(f"Test: {test_size} images")
+    print(f"Classes: {full_dataset.classes}")
+    print(f"Class to idx mapping: {full_dataset.class_to_idx}\n")
 
     return train_loader, val_loader, test_loader
