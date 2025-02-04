@@ -1,12 +1,9 @@
 import os
-from datasets import load_dataset, config, Dataset
-from huggingface_hub import get_token
-from torch.utils import data
+import pandas as pd
+from datasets import load_dataset
 import shutil
+import numpy as np
 from PIL import Image
-import requests
-from io import BytesIO
-import json
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -55,12 +52,12 @@ def calculate_box_area_percentage(box, image_size):
     return (box / image_area) * 100
 
 def load_and_save_shard(
-    dataset_name="Harvard-Edge/Wake-Vision-Train-Large",
-    split="train_large",
-    target_images_per_shard=100,
+    dataset_name,
+    split,
+    target_images_per_shard,
     shard_id=0,
-    relabel_json_path=None,
-    confidence_threshold=0.55,
+    false_positive_csv=None,
+    false_negative_csv=None,
     min_box_area_percentage=5.0,
     dual_save=False
 ):
@@ -72,25 +69,33 @@ def load_and_save_shard(
         split (str): Dataset split to use
         target_images_per_shard (int): Target number of images per shard
         shard_id (int): Which shard to process
-        relabel_json_path (str, optional): Path to relabeling JSON file. If None, uses original labels
-        confidence_threshold (float): Confidence threshold for person detection
-        min_box_area_percentage (float): Minimum box area as percentage of image size
-        dual_save (bool): If True and relabel_json_path is provided, save both original and relabeled versions
+        false_positive_csv (str, optional): Path to CSV file containing false positives (human → no-human)
+        false_negative_csv (str, optional): Path to CSV file containing false negatives (no-human → human) with areas
+        min_box_area_percentage (float): Minimum box area as percentage of image size for false negatives
+        dual_save (bool): If True and CSV files provided, save both original and relabeled versions
     
     Returns:
         str or tuple: Path to saved dataset directory, or tuple of (original_dir, relabeled_dir) if dual_save=True
     """
-    # Load relabeling data if path is provided
-    relabel_data = {}
-    use_relabeling = relabel_json_path is not None
+    # Load relabeling data if needed
+    false_positives = set()
+    false_negatives = {}
+    use_relabeling = false_positive_csv is not None or false_negative_csv is not None
+    
     if use_relabeling:
-        try:
-            with open(relabel_json_path, 'r') as f:
-                relabel_data = json.load(f)
-            print(f"Loaded relabeling data from {relabel_json_path}")
-        except FileNotFoundError:
-            print(f"Warning: Relabeling file {relabel_json_path} not found. Using original labels.")
-            use_relabeling = False
+        if false_positive_csv:
+            if not os.path.exists(false_positive_csv):
+                raise FileNotFoundError(f"False positive CSV file not found: {false_positive_csv}")
+            fp_df = pd.read_csv(false_positive_csv)
+            false_positives = set(fp_df['filename'].tolist())
+            print(f"Loaded {len(false_positives)} false positives from {false_positive_csv}")
+        
+        if false_negative_csv:
+            if not os.path.exists(false_negative_csv):
+                raise FileNotFoundError(f"False negative CSV file not found: {false_negative_csv}")
+            fn_df = pd.read_csv(false_negative_csv)
+            false_negatives = dict(zip(fn_df['filename'], fn_df['largest_person_area']))
+            print(f"Loaded {len(false_negatives)} false negatives from {false_negative_csv}")
 
     # Get dataset size (total number of images in dataset)
     total_examples = 5760428
@@ -143,32 +148,25 @@ def load_and_save_shard(
         original_label = item['person']
         
         # Determine label based on whether we're using relabeling
-        if use_relabeling:# and filename in relabel_data:
-            
-            new_label = 0  # Default to no-human
-            image_data = relabel_data[filename]
-            #if 'objects' in image_data:
-            for obj in image_data:
-                if obj['c'] > confidence_threshold:
-                    # Calculate box area percentage
-                    area_percentage = calculate_box_area_percentage(obj['b'], img.size)
-                    if area_percentage >= min_box_area_percentage:
-                        new_label = 1
-                        relabeled_count += 1
-                        break
-                    else:
-                        small_person_count += 1
-                        print(f"Person detected in {filename} but box too small ({area_percentage:.2f}% < {min_box_area_percentage}%)")
-            
-            if new_label != original_label:
-                flipped_labels += 1
-                print(f"Label flipped for {filename}: {original_label} -> {new_label}")
-        else:
-            # Use original label if not relabeling or no relabel data for this image
+        if use_relabeling:
+            # Start with original label
             new_label = original_label
-            if use_relabeling:
-                print(f"Warning: No relabeling data found for {filename}, using original label: {original_label}")
-
+            
+            # Check if this is a false positive (human → no-human)
+            if filename in false_positives and original_label == 1:
+                new_label = 0
+                flipped_labels += 1
+            
+            # Check if this is a false negative (no-human → human)
+            elif filename in false_negatives and original_label == 0:
+                area = false_negatives[filename]
+                area_percentage = calculate_area_percentage(area, img.width, img.height)
+                
+                if area_percentage >= min_box_area_percentage:
+                    new_label = 1
+                    flipped_labels += 1
+                else:
+                    small_person_count += 1
         # Save original version
         if dual_save or not use_relabeling:
             original_path = os.path.join(original_shard_dir, 'human' if original_label == 1 else 'no-human', filename)
@@ -180,8 +178,8 @@ def load_and_save_shard(
             img.save(relabeled_path)
 
         total_count += 1
-        if i % 10 == 0:
-            print(f"Saved {i+1} images... (Last: {filename}, Label: {'human' if new_label == 1 else 'no-human'})")
+        if i % 100 == 0:
+            print(f"Processed {total_count} images...")
 
     # Print final statistics
     print(f"\nProcessing complete for shard {shard_id}:")
@@ -190,25 +188,54 @@ def load_and_save_shard(
         print(f"Images with relabeling data: {relabeled_count}")
         print(f"Labels flipped: {flipped_labels}")
         print(f"Small person detections ignored: {small_person_count}")
-    print(f"Shard saved to:")
+    # Print final statistics
+    print(f"\nProcessing complete for shard {shard_id}:")
+    print(f"Total images processed: {total_count}")
+    if use_relabeling:
+        print(f"False positives corrected: {flipped_labels} (human → no-human)")
+        print(f"False negatives corrected: {flipped_labels} (no-human → human)")
+        print(f"Small detections ignored: {small_person_count}")
+    
+    # Print save locations
+    print(f"\nShard saved to:")
     if dual_save:
         print(f"Original labels: {original_shard_dir}")
         print(f"Relabeled version: {relabeled_shard_dir}")
         return original_shard_dir, relabeled_shard_dir
     else:
-        saved_dir = original_shard_dir
+        saved_dir = relabeled_shard_dir if use_relabeling else original_shard_dir
         print(f"Directory: {saved_dir}")
         return saved_dir
 
 if __name__ == '__main__':
-    # Example usage with relabeling
-    load_and_save_shard(
-        dataset_name="Harvard-Edge/Wake-Vision-Train-Large", 
-        split="train_large", 
-        target_images_per_shard=100, 
-        shard_id=0,
-        confidence_threshold=0.55,
-        min_box_area_percentage=5.0,
-        relabel_json_path='/Users/benx13/code/edge_ai_modelcentric/results_new/results/shard_0/images_0-5000.json',
-        dual_save=True
+    import argparse
+    parser = argparse.ArgumentParser(description="Download and preprocess dataset")
+    parser.add_argument("--dataset", type=str, default="Harvard-Edge/Wake-Vision-Train-Large",
+                      help="Dataset name on Hugging Face")
+    parser.add_argument("--split", type=str, default="train_large",
+                      help="Dataset split to use")
+    parser.add_argument("--images_per_shard", type=int, default=100,
+                      help="Number of images per shard")
+    parser.add_argument("--shard_id", type=int, default=0,
+                      help="Shard ID to process")
+    parser.add_argument("--false_positive_csv", type=str,
+                      help="Path to CSV file containing false positives")
+    parser.add_argument("--false_negative_csv", type=str,
+                      help="Path to CSV file containing false negatives with areas")
+    parser.add_argument("--min_box_area", type=float, default=5.0,
+                      help="Minimum box area as percentage of image area")
+    parser.add_argument("--dual_save", action="store_true",
+                      help="Save both original and relabeled versions when using CSV files")
+    
+    args = parser.parse_args()
+    
+    result = load_and_save_shard(
+        dataset_name=args.dataset,
+        split=args.split,
+        target_images_per_shard=args.images_per_shard,
+        shard_id=args.shard_id,
+        false_positive_csv=args.false_positive_csv,
+        false_negative_csv=args.false_negative_csv,
+        min_box_area_percentage=args.min_box_area,
+        dual_save=args.dual_save
     )
