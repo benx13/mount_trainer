@@ -20,7 +20,7 @@ def get_augmentation_pipeline(train=True, img_size=224):
             A.RandomFog(fog_limit=(10, 30), alpha_coef=0.08, p=0.1),
             A.RandomShadow(shadow_roi=(0, 0.5, 1, 1), num_shadows_lower=1, num_shadows_upper=2, shadow_dimension=5, p=0.1),
             A.ISONoise(intensity=(0.1, 0.3), color_shift=(0.01, 0.03), p=0.1),
-            A.JpegCompression(quality_factor=(70, 95), p=0.1),
+            A.ImageCompression(quality_lower=70, quality_upper=95, p=0.1),
             A.ElasticTransform(alpha=1, sigma=25, alpha_affine=25, interpolation=cv2.INTER_CUBIC, border_mode=cv2.BORDER_REFLECT_101, p=0.05),
             A.GridDistortion(num_steps=5, distort_limit=(-0.1, 0.1), interpolation=cv2.INTER_CUBIC, border_mode=cv2.BORDER_REFLECT_101, p=0.05),
             A.ToGray(p=0.05),
