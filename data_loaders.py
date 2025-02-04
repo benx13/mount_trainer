@@ -10,7 +10,7 @@ from datasets import AlbumentationsDataset, TransformWrapper
 def get_augmentation_pipeline(train=True, img_size=224):
     if train:
         augmentation_list = [
-            A.RandomResizedCrop(height=img_size, width=img_size, scale=(0.8, 1.0), ratio=(0.75, 1.33), p=1.0, interpolation=cv2.INTER_CUBIC),
+            A.RandomResizedCrop(size=(img_size, img_size), scale=(0.8, 1.0), ratio=(0.75, 1.33), p=1.0),
             A.HorizontalFlip(p=0.5),
             A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.8),
             A.GaussianBlur(blur_limit=(3, 7), sigma_limit=0, p=0.3),
@@ -24,17 +24,15 @@ def get_augmentation_pipeline(train=True, img_size=224):
             A.ElasticTransform(alpha=1, sigma=25, alpha_affine=25, interpolation=cv2.INTER_CUBIC, border_mode=cv2.BORDER_REFLECT_101, p=0.05),
             A.GridDistortion(num_steps=5, distort_limit=(-0.1, 0.1), interpolation=cv2.INTER_CUBIC, border_mode=cv2.BORDER_REFLECT_101, p=0.05),
             A.ToGray(p=0.05),
-            A.FancyPCA(alpha=0.05, p=0.05),
-            A.MixUp(alpha=0.2, p=0.02),
-            A.Cutout(num_holes=8, max_h_size=16, max_w_size=16, fill_value=(0,0,0), p=0.2),
-            A.CutMix(num_mix=2, p=0.02),
+
+            A.CoarseDropout(max_holes=8, max_height=16, max_width=16, min_holes=4, min_height=8, min_width=8, p=0.2),
             A.CLAHE(clip_limit=(1.0, 4.0), tile_grid_size=(8, 8), p=0.3),
             A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),
         ]
     else:
         augmentation_list = [
-            A.Resize(height=img_size, width=img_size, interpolation=cv2.INTER_CUBIC),
+            A.Resize(height=img_size, width=img_size),
             A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),
         ]
