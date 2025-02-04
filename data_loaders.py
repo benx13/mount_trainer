@@ -13,7 +13,7 @@ def get_augmentation_pipeline(train=True, img_size=224):
             A.RandomResizedCrop(size=(img_size, img_size), scale=(0.8, 1.0), ratio=(0.75, 1.33), p=1.0),
             A.HorizontalFlip(p=0.5),
             A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.8),
-            A.GaussianBlur(blur_limit=(3, 7), sigma_limit=0, p=0.3),
+            A.GaussianBlur(blur_limit=(3, 7), sigma_limit=(0.1, 2.0), p=0.3),
             A.CoarseDropout(max_holes=8, max_height=0.1, max_width=0.1, min_holes=4, min_height=0.05, min_width=0.05, p=0.5),
             A.Affine(scale=(0.95, 1.05), translate_percent=(-0.02, 0.02), rotate=(-5, 5), shear=(-2, 2), p=0.2),
             A.RandomRain(brightness_coefficient=0.9, drop_length=10, drop_width=1, blur_value=7, rain_type='drizzle', p=0.1),
