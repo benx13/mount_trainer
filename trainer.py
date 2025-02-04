@@ -2,8 +2,26 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 import os
+import wandb
 
 def save_checkpoint(state, is_best, output_dir, model_name):
+    """Save model checkpoint and optionally log to wandb."""
+    # Save locally
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Save latest checkpoint
+    latest_path = os.path.join(output_dir, f"{model_name}_latest.pth")
+    torch.save(state, latest_path)
+    
+    # If this is the best model, save a copy
+    if is_best:
+        best_path = os.path.join(output_dir, f"{model_name}_best.pth")
+        torch.save(state, best_path)
+        
+        # Log best model to wandb
+        wandb.save(best_path)
+        
+    return latest_path if not is_best else best_path
     """
     Save model checkpoint.
     
@@ -99,6 +117,9 @@ def train_model(
         running_loss = 0.0
         correct_predictions = 0
         total_samples = 0
+        
+        # Create progress bar
+        train_pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{epochs} [Train]')
 
         train_loop = tqdm(train_loader, leave=False)
         for images, labels in train_loop:
@@ -123,6 +144,13 @@ def train_model(
 
         train_accuracy = correct_predictions / total_samples
         train_loss = running_loss / len(train_loader)
+        
+        # Log training metrics to wandb
+        wandb.log({
+            'train/loss': train_loss,
+            'train/accuracy': train_accuracy,
+            'train/epoch': epoch + 1
+        })
 
         # Validation phase
         model.eval()
@@ -149,6 +177,14 @@ def train_model(
         val_accuracy = val_correct_predictions / val_total_samples
         val_loss = val_loss / len(val_loader)
 
+        # Log validation metrics to wandb
+        wandb.log({
+            'val/loss': val_loss,
+            'val/accuracy': val_accuracy,
+            'val/epoch': epoch + 1,
+            'learning_rate': optimizer.param_groups[0]['lr']
+        })
+        
         print(f"Epoch [{epoch+1}/{epochs}], "
               f"Train Loss: {train_loss:.4f}, "
               f"Train Acc: {train_accuracy:.4f}, "
@@ -158,6 +194,10 @@ def train_model(
         # Save checkpoint
         is_best = val_accuracy > best_val_accuracy
         best_val_accuracy = max(val_accuracy, best_val_accuracy)
+        
+        # Log best metrics to wandb
+        if is_best:
+            wandb.run.summary['best_val_accuracy'] = best_val_accuracy
         
         checkpoint = {
             'epoch': epoch,
@@ -198,6 +238,17 @@ def train_model(
                 test_wrong += 1
 
     test_accuracy = test_correct / (test_correct + test_wrong)
+    
+    # Log final test metrics to wandb
+    wandb.run.summary.update({
+        'test/accuracy': test_accuracy,
+        'test/correct': test_correct,
+        'test/wrong': test_wrong
+    })
+    
     print(f"\nTest accuracy of the best model: {test_accuracy:.4f}\n")
+
+    # Finish the wandb run
+    wandb.finish()
 
     return best_val_accuracy, test_accuracy

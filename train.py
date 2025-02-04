@@ -2,15 +2,31 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import wandb
 from data_loaders import create_data_loaders
 from mcunet.model_zoo import build_model
 import argparse
 from trainer import train_model
 
 def main(args):
+    # Initialize wandb
+    wandb.init(
+        project="mcunet-training",
+        config={
+            "net_id": args.net_id,
+            "learning_rate": args.learning_rate,
+            "batch_size": args.batch_size,
+            "epochs": args.epochs,
+            "val_split": args.val_split,
+            "test_split": args.test_split,
+            "seed": args.seed
+        }
+    )
+    
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    wandb.config.update({"device": str(device)})
 
     # Create model using build_model
     model, image_size, description = build_model(
@@ -62,6 +78,14 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train MCUNet model on Wake Vision dataset")
+    
+    # Wandb arguments
+    parser.add_argument("--wandb-project", type=str, default="mcunet-training",
+                        help="Weights & Biases project name")
+    parser.add_argument("--wandb-entity", type=str, default=None,
+                        help="Weights & Biases entity (username or team name)")
+    parser.add_argument("--wandb-name", type=str, default=None,
+                        help="Weights & Biases run name")
     
     # Model arguments
     parser.add_argument("--net_id", type=str, default="mcunet-vww2",
