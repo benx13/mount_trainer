@@ -5,6 +5,7 @@ import shutil
 import numpy as np
 from PIL import Image
 import logging
+from huggingface_hub import get_token
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 def configure_fast_downloads():
     """Configure Hugging Face for faster direct downloads."""
     # Set higher download speeds and concurrent downloads
-    config.MAX_SHARD_SIZE = "1000GB"
+    MAX_SHARD_SIZE = "1000GB"
 
     # Enable HF native transfer for better speed
     os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"  # Enable HF's fast transfer
@@ -59,7 +60,8 @@ def load_and_save_shard(
     false_positive_csv=None,
     false_negative_csv=None,
     min_box_area_percentage=5.0,
-    dual_save=False
+    dual_save=False,
+    download_all=False
 ):
     """
     Load and save a specific shard of the Wake Vision dataset to disk with optional relabeling.
@@ -100,24 +102,37 @@ def load_and_save_shard(
     # Get dataset size (total number of images in dataset)
     total_examples = 5760428
     
-    # Calculate the number of shards needed
-    num_shards = total_examples // target_images_per_shard
-    if total_examples % target_images_per_shard != 0:
-        num_shards += 1
-
-    print(f"Dataset has {total_examples} examples. Using {num_shards} shards with ~{target_images_per_shard} images per shard.")
+    if download_all:
+        num_shards = 1
+        target_images_per_shard = total_examples
+        print(f"Downloading entire dataset with {total_examples} examples without sharding")
+    else:
+        # Calculate the number of shards needed
+        num_shards = total_examples // target_images_per_shard
+        if total_examples % target_images_per_shard != 0:
+            num_shards += 1
+        print(f"Dataset has {total_examples} examples. Using {num_shards} shards with ~{target_images_per_shard} images per shard.")
+    
     print(f"Using {'relabeled' if use_relabeling else 'original'} labels")
 
-    # Load the dataset in streaming mode
+    # Get authentication token
     token = get_token()
     if token is None:
         raise ValueError("Please login to Hugging Face using `huggingface-cli login` first")
 
     configure_fast_downloads()
-    dataset = load_dataset(dataset_name, split=split, streaming=True, token=token)
     
-    # Shard the dataset
-    sharded_dataset = dataset.shard(num_shards=num_shards, index=shard_id)
+    if download_all:
+        # Load the entire dataset at once without streaming for faster download
+        print("Loading entire dataset at once (non-streaming mode)...")
+        dataset = load_dataset(dataset_name, split=split, streaming=False, token=token)
+        sharded_dataset = dataset
+    else:
+        # Load the dataset in streaming mode for sharded download
+        print("Loading dataset in streaming mode...")
+        dataset = load_dataset(dataset_name, split=split, streaming=True, token=token)
+        # Shard the dataset
+        sharded_dataset = dataset.shard(num_shards=num_shards, index=shard_id)
 
     # Create directories to save images
     base_dir = f"shard_{shard_id}_human_vs_nohuman"
@@ -138,9 +153,10 @@ def load_and_save_shard(
     flipped_labels = 0
     small_person_count = 0
 
-    # Iterate over the shard and download images
+    # Iterate over the dataset
+    total_items = len(sharded_dataset) if download_all else target_images_per_shard
     for i, item in enumerate(sharded_dataset):
-        if i >= target_images_per_shard:
+        if not download_all and i >= target_images_per_shard:
             break
 
         img = item['image']
@@ -160,7 +176,7 @@ def load_and_save_shard(
             # Check if this is a false negative (no-human → human)
             elif filename in false_negatives and original_label == 0:
                 area = false_negatives[filename]
-                area_percentage = calculate_area_percentage(area, img.width, img.height)
+                area_percentage = calculate_box_area_percentage(area, (img.width, img.height))
                 
                 if area_percentage >= min_box_area_percentage:
                     new_label = 1
@@ -178,7 +194,7 @@ def load_and_save_shard(
             img.save(relabeled_path)
 
         total_count += 1
-        if i % 100 == 0:
+        if i % 10 == 0:
             print(f"Processed {total_count} images...")
 
     # Print final statistics
@@ -226,6 +242,8 @@ if __name__ == '__main__':
                       help="Minimum box area as percentage of image area")
     parser.add_argument("--dual_save", action="store_true",
                       help="Save both original and relabeled versions when using CSV files")
+    parser.add_argument("--download_all", action="store_true",
+                      help="Download entire dataset without sharding")
     
     args = parser.parse_args()
     
@@ -237,5 +255,6 @@ if __name__ == '__main__':
         false_positive_csv=args.false_positive_csv,
         false_negative_csv=args.false_negative_csv,
         min_box_area_percentage=args.min_box_area,
-        dual_save=args.dual_save
+        dual_save=args.dual_save,
+        download_all=args.download_all
     )
