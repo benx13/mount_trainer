@@ -2,9 +2,43 @@ import torch
 from torch.utils.data import DataLoader
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+import cv2
 import numpy as np
 import os
 from datasets import AlbumentationsDataset, TransformWrapper
+
+def get_augmentation_pipeline(train=True, img_size=224):
+    if train:
+        augmentation_list = [
+            A.RandomResizedCrop(height=img_size, width=img_size, scale=(0.8, 1.0), ratio=(0.75, 1.33), p=1.0, interpolation=cv2.INTER_CUBIC),
+            A.HorizontalFlip(p=0.5),
+            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.8),
+            A.GaussianBlur(blur_limit=(3, 7), sigma_limit=0, p=0.3),
+            A.CoarseDropout(max_holes=8, max_height=0.1, max_width=0.1, min_holes=4, min_height=0.05, min_width=0.05, fill_value=0, mask_fill_value=None, p=0.5),
+            A.Affine(scale=(0.95, 1.05), translate_percent=(-0.02, 0.02), rotate=(-5, 5), shear=(-2, 2), p=0.2),
+            A.RandomRain(brightness_coefficient=0.9, drop_length=10, drop_width=1, blur_value=7, rain_type=None, p=0.1),
+            A.RandomFog(fog_limit=(10, 30), alpha_coef=0.08, p=0.1),
+            A.RandomShadow(shadow_roi=(0, 0.5, 1, 1), num_shadows_lower=1, num_shadows_upper=2, shadow_dimension=5, p=0.1),
+            A.ISONoise(intensity=(0.1, 0.3), color_shift=(0.01, 0.03), p=0.1),
+            A.JpegCompression(quality_factor=(70, 95), p=0.1),
+            A.ElasticTransform(alpha=1, sigma=25, alpha_affine=25, interpolation=cv2.INTER_CUBIC, border_mode=cv2.BORDER_REFLECT_101, p=0.05),
+            A.GridDistortion(num_steps=5, distort_limit=(-0.1, 0.1), interpolation=cv2.INTER_CUBIC, border_mode=cv2.BORDER_REFLECT_101, p=0.05),
+            A.ToGray(p=0.05),
+            A.FancyPCA(alpha=0.05, p=0.05),
+            A.MixUp(alpha=0.2, p=0.02),
+            A.Cutout(num_holes=8, max_h_size=16, max_w_size=16, fill_value=(0,0,0), p=0.2),
+            A.CutMix(num_mix=2, p=0.02),
+            A.CLAHE(clip_limit=(1.0, 4.0), tile_grid_size=(8, 8), p=0.3),
+            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ToTensorV2(),
+        ]
+    else:
+        augmentation_list = [
+            A.Resize(height=img_size, width=img_size, interpolation=cv2.INTER_CUBIC),
+            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ToTensorV2(),
+        ]
+    return A.Compose(augmentation_list, p=1.0, additional_targets={'mask': 'mask'})
 
 def create_data_loaders(
     data_dir,
@@ -44,29 +78,9 @@ def create_data_loaders(
     if test_dir and not os.path.exists(test_dir):
         raise ValueError(f"Test directory {test_dir} does not exist")
 
-    # Define augmentations using Albumentations
-    train_transform = A.Compose([
-        A.RandomResizedCrop(height=input_shape[0], width=input_shape[1], scale=(0.8, 1.0)),
-        A.HorizontalFlip(p=0.5),
-        A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=20, p=0.5),
-        A.OneOf([
-            A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2),
-            A.HueSaturationValue(hue_shift_limit=20, sat_shift_limit=30, val_shift_limit=20),
-        ], p=0.5),
-        A.OneOf([
-            A.GaussNoise(var_limit=(10.0, 50.0)),
-            A.GaussianBlur(blur_limit=(3, 7)),
-            A.MotionBlur(blur_limit=(3, 7)),
-        ], p=0.3),
-        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ToTensorV2(),
-    ])
-
-    val_transform = A.Compose([
-        A.Resize(height=input_shape[0], width=input_shape[1]),
-        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ToTensorV2(),
-    ])
+    # Get augmentation pipelines
+    train_transform = get_augmentation_pipeline(train=True, img_size=input_shape[0])
+    val_transform = get_augmentation_pipeline(train=False, img_size=input_shape[0])
 
     # Calculate appropriate number of workers if not specified
     if num_workers is None:
