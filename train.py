@@ -7,6 +7,7 @@ from data_loaders import create_data_loaders
 from mcunet.model_zoo import build_model
 import argparse
 from trainer import train_model
+from lebel_smooth import LabelSmoothingLoss
 
 def main(args):
     # Initialize wandb
@@ -52,7 +53,8 @@ def main(args):
     )
 
     # Define loss function, optimizer and scheduler
-    criterion = nn.CrossEntropyLoss()
+    #criterion = nn.CrossEntropyLoss()
+    criterion = LabelSmoothingLoss(smoothing=0.1)
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', patience=5, factor=0.5, verbose=True
