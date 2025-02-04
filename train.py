@@ -8,6 +8,7 @@ from mcunet.model_zoo import build_model
 import argparse
 from trainer import train_model
 from lebel_smooth import LabelSmoothingLoss
+from torch.cuda.amp import GradScaler, autocast
 
 def main(args):
     # Initialize wandb
@@ -59,6 +60,7 @@ def main(args):
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', patience=5, factor=0.5, verbose=True
     )
+    scaler = GradScaler()  # Initialize GradScaler
 
     # Train the model using train_model function
     best_val_accuracy, test_accuracy = train_model(
@@ -69,6 +71,7 @@ def main(args):
         criterion=criterion,
         optimizer=optimizer,
         scheduler=scheduler,
+        scaler=scaler,
         device=device,
         epochs=args.epochs,
         output_dir=args.checkpoint_dir,
