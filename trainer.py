@@ -72,6 +72,7 @@ def train_model(
     test_loader,
     criterion,
     optimizer,
+    scheduler,
     device,
     epochs,
     output_dir,
@@ -185,11 +186,16 @@ def train_model(
             'learning_rate': optimizer.param_groups[0]['lr']
         })
         
+        # Step the scheduler based on validation loss
+        scheduler.step(val_loss)
+        current_lr = optimizer.param_groups[0]['lr']
+
         print(f"Epoch [{epoch+1}/{epochs}], "
               f"Train Loss: {train_loss:.4f}, "
               f"Train Acc: {train_accuracy:.4f}, "
               f"Val Loss: {val_loss:.4f}, "
-              f"Val Acc: {val_accuracy:.4f}")
+              f"Val Acc: {val_accuracy:.4f}, "
+              f"LR: {current_lr:.2e}")
 
         # Save checkpoint
         is_best = val_accuracy > best_val_accuracy

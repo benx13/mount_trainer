@@ -51,9 +51,12 @@ def main(args):
         test_dir=args.test_dir
     )
 
-    # Define loss function and optimizer
+    # Define loss function, optimizer and scheduler
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', patience=5, factor=0.5, verbose=True
+    )
 
     # Train the model using train_model function
     best_val_accuracy, test_accuracy = train_model(
@@ -63,6 +66,7 @@ def main(args):
         test_loader=test_loader,
         criterion=criterion,
         optimizer=optimizer,
+        scheduler=scheduler,
         device=device,
         epochs=args.epochs,
         output_dir=args.checkpoint_dir,
