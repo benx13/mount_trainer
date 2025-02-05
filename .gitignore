@@ -7,6 +7,8 @@
 *.hdf5
 *.pkl
 *.pickle
+*.jpg
+*.csv
 
 # Model checkpoints and logs
 pytorch_checkpoints/

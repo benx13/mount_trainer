@@ -5,31 +5,157 @@ from albumentations.pytorch import ToTensorV2
 import cv2
 import numpy as np
 import os
-from datasets import AlbumentationsDataset, TransformWrapper
+from dataset import AlbumentationsDataset, TransformWrapper
+
+import albumentations as A
+import cv2
+from albumentations.pytorch import ToTensorV2
+
+def train_augmentation_pipeline(img_size: int):
+    return A.Compose([
+        # 1. Always crop & resize to target dimensions
+        A.RandomResizedCrop(
+            size=(img_size, img_size),
+            scale=(0.8, 1.0),
+            ratio=(0.75, 1.33),
+            interpolation=cv2.INTER_LINEAR,
+            p=1.0
+        ),
+
+        # 2. Basic horizontal flip
+        A.HorizontalFlip(p=0.5),
+
+        # 3. Light color transformations (choose 1 out of the 4)
+        A.SomeOf(
+            transforms=[
+                A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=1.0),
+                A.RandomBrightnessContrast(brightness_limit=0.1, contrast_limit=0.1, p=1.0),
+                A.ToGray(p=1.0),
+                A.CLAHE(clip_limit=(1.0, 4.0), tile_grid_size=(8, 8), p=1.0)
+            ],
+            n=1,              # Pick exactly 1 transform to apply
+            p=0.4             # 40% chance to apply any color augmentation
+        ),
+
+        # 4. Apply a blur or motion blur with moderate kernel sizes
+        A.OneOf([
+            A.GaussianBlur(blur_limit=(3, 7), p=1.0),
+            A.MotionBlur(blur_limit=7, p=1.0),
+        ], p=0.3),
+
+        # 5. Mild geometric transformations
+        A.ShiftScaleRotate(
+            shift_limit=0.05,     # small shift
+            scale_limit=0.1,      # up to +/-10% scale
+            rotate_limit=10,      # up to +/-10 degrees
+            interpolation=cv2.INTER_LINEAR,
+            border_mode=cv2.BORDER_REFLECT_101,
+            p=0.2
+        ),
+
+        # 6. Occasional random weather condition
+        A.OneOf([
+            A.RandomRain(
+                brightness_coefficient=0.9,
+                drop_length=8,       # smaller drop length
+                drop_width=1,
+                blur_value=5,
+                rain_type='drizzle',
+                p=1.0
+            ),
+            A.RandomFog(fog_limit=(10, 20), alpha_coef=0.05, p=1.0),
+            A.RandomShadow(
+                shadow_roi=(0, 0.5, 1, 1),
+                num_shadows_lower=1,
+                num_shadows_upper=2,
+                shadow_dimension=5,
+                p=1.0
+            ),
+            A.RandomSunFlare(
+                flare_roi=(0, 0, 1, 0.5),
+                angle_lower=0.5,
+                p=1.0
+            ),
+        ], p=0.15),  # 15% chance of applying any weather effect
+
+        # 7. Occasional Coarse Dropout
+        A.CoarseDropout(
+            max_holes=8,
+            max_height=16,
+            max_width=16,
+            min_holes=4,
+            min_height=8,
+            min_width=8,
+            p=0.2
+        ),
+
+        # 8. Normalize & convert to tensor
+        A.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        ),
+        ToTensorV2(),
+    ])
+
+
 
 def get_augmentation_pipeline(train=True, img_size=224):
     if train:
-        augmentation_list = [
-            A.RandomResizedCrop(size=(img_size, img_size), scale=(0.8, 1.0), ratio=(0.75, 1.33), p=1.0),
-            A.HorizontalFlip(p=0.5),
-            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.8),
-            A.GaussianBlur(blur_limit=(3, 7), sigma_limit=(0.1, 2.0), p=0.3),
-            A.CoarseDropout(max_holes=8, max_height=0.1, max_width=0.1, min_holes=4, min_height=0.05, min_width=0.05, p=0.5),
-            A.Affine(scale=(0.95, 1.05), translate_percent=(-0.02, 0.02), rotate=(-5, 5), shear=(-2, 2), p=0.2),
-            A.RandomRain(brightness_coefficient=0.9, drop_length=10, drop_width=1, blur_value=7, rain_type='drizzle', p=0.1),
-            A.RandomFog(fog_limit=(10, 30), alpha_coef=0.08, p=0.1),
-            A.RandomShadow(shadow_roi=(0, 0.5, 1, 1), num_shadows_lower=1, num_shadows_upper=2, shadow_dimension=5, p=0.1),
-            A.ISONoise(intensity=(0.1, 0.3), color_shift=(0.01, 0.03), p=0.1),
-            A.ImageCompression(quality_lower=70, quality_upper=95, p=0.1),
-            A.ElasticTransform(alpha=1, sigma=25, alpha_affine=25, interpolation=cv2.INTER_CUBIC, border_mode=cv2.BORDER_REFLECT_101, p=0.05),
-            A.GridDistortion(num_steps=5, distort_limit=(-0.1, 0.1), interpolation=cv2.INTER_CUBIC, border_mode=cv2.BORDER_REFLECT_101, p=0.05),
-            A.ToGray(p=0.05),
+        augmentation_list = train_augmentation_pipeline(img_size)
+        # augmentation_list = A.Compose([
+        #     A.RandomResizedCrop(size=(img_size,img_size), scale=(0.8, 1.0), ratio=(0.75, 1.33), p=1.0),
+        #     A.HorizontalFlip(p=0.6),
+        #     A.OneOrOther(
+        #         first=A.ChannelShuffle(p=0.5),
+        #         second=A.SelectiveChannelTransform(
+        #             transforms=[
+        #                 A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=1.0),
+        #                 A.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=10, val_shift_limit=10, p=1.0)
+        #             gi],
+        #             channels=[0, 1, 2],
+        #             p=0.5
+        #         ),
+        #         p=0.3
+        #     ),
+        #     A.OneOf([
+        #         A.GaussianBlur(blur_limit=(3, 25), p=1.0),
+        #         A.MotionBlur(blur_limit=(101, 491), p=1.0),
+        #         A.GlassBlur(sigma=0.7, max_delta=50, iterations=2, p=1.0),
+        #     ], p=0.5),
+        #     A.Sequential([
+        #         A.ShiftScaleRotate(shift_limit=0.3, scale_limit=0.3, rotate_limit=50, p=0.5),
+        #         A.Affine(scale=(0.95, 1.05), translate_percent=(-0.02, 0.02), rotate=(-5, 5), shear=(-2, 2),p=0.5)
+        #     ], p=0.3),
+        #     A.OneOf([
+        #         A.ElasticTransform(alpha=1, sigma=25, alpha_affine=25,interpolation=cv2.INTER_CUBIC,border_mode=cv2.BORDER_REFLECT_101,p=1.0),
+        #         A.GridDistortion(num_steps=5, distort_limit=(-0.1, 0.1),interpolation=cv2.INTER_CUBIC,border_mode=cv2.BORDER_REFLECT_101,p=1.0),
+        #         A.OpticalDistortion(distort_limit=(0.8, 0.9), shift_limit=(0.4, 0.6),border_mode=0,p=1.0),
+        #     ], p=0.3),
+        #     A.SomeOf(
+        #         transforms=[
+        #             A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=1.0),
+        #             A.InvertImg(p=1.0),
+        #             A.ToGray(p=1.0),
+        #             A.Posterize(num_bits=3, p=1.0),
+        #             A.CLAHE(clip_limit=(1.0, 4.0), tile_grid_size=(8, 8), p=1.0)],
+        #         n=2,
+        #         replace=False,
+        #         p=0.5
+        #     ),
+        #     A.OneOf([
+        #         A.RandomRain(brightness_coefficient=0.9, drop_length=10, drop_width=1,blur_value=7, rain_type='drizzle', p=1.0),
+        #         A.RandomFog(fog_limit=(10, 30), alpha_coef=0.08, p=1.0),
+        #         A.RandomShadow(shadow_roi=(0, 0.5, 1, 1), num_shadows_lower=1, num_shadows_upper=2, shadow_dimension=5, p=1.0),
+        #         A.RandomSnow(brightness_coeff=2.5, snow_point_lower=0.3, snow_point_upper=0.5, p=1.0),
+        #         A.RandomSunFlare(flare_roi=(0, 0, 1, 0.5), angle_lower=0.5, p=1.0),
+        #     ], p=0.3),
+        #     A.MultiplicativeNoise(multiplier=[0.5, 1.5], elementwise=True, per_channel=True, p=0.2),
+        #     A.CoarseDropout(max_holes=8, max_height=16, max_width=16,min_holes=4, min_height=8, min_width=8,p=0.2),
+        #     A.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225]),
+        #     ToTensorV2()
+        # ])
 
-            A.CoarseDropout(max_holes=8, max_height=16, max_width=16, min_holes=4, min_height=8, min_width=8, p=0.2),
-            A.CLAHE(clip_limit=(1.0, 4.0), tile_grid_size=(8, 8), p=0.3),
-            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-            ToTensorV2(),
-        ]
+
     else:
         augmentation_list = [
             A.Resize(height=img_size, width=img_size),
