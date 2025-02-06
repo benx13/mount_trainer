@@ -4,6 +4,7 @@ from tqdm import tqdm
 import os
 import wandb
 from torch.amp import GradScaler, autocast # Import GradScaler and autocast
+import torch.distributed as dist
 
 def save_checkpoint(state, is_best, output_dir, model_name):
     """Save model checkpoint and optionally log to wandb."""
@@ -89,10 +90,12 @@ def train_model(
     model_name,
     net_id,
     num_classes,
-    resume_training=False
+    resume_training=False,
+    rank=0,
+    world_size=1
 ):
     """
-    Train a model with the given parameters and data loaders.
+    Train a model with support for distributed training.
     
     Args:
         model: The PyTorch model to train
@@ -108,6 +111,8 @@ def train_model(
         net_id: ID of the network architecture
         num_classes: Number of output classes
         resume_training: Whether to resume from latest checkpoint
+        rank: Rank of the current process
+        world_size: Total number of processes
     
     Returns:
         float: Best validation accuracy achieved
@@ -129,16 +134,17 @@ def train_model(
         best_val_accuracy = 0.0
 
     for epoch in range(start_epoch, epochs):
+        if world_size > 1:
+            train_loader.sampler.set_epoch(epoch)
+        
         # Training phase
         model.train()
         running_loss = 0.0
         correct_predictions = 0
         total_samples = 0
         
-        # Create progress bar
-        train_pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{epochs} [Train]')
-
-        train_loop = tqdm(train_loader, leave=False)
+        train_loop = tqdm(train_loader, leave=False) if rank == 0 else train_loader
+        
         for images, labels in train_loop:
             
             images, labels = images.to(device), labels.to(device)
@@ -163,15 +169,30 @@ def train_model(
                 train_acc=correct_predictions / total_samples
             )
 
+        # Synchronize metrics across processes
+        if world_size > 1:
+            train_loss = torch.tensor([running_loss]).to(device)
+            train_correct = torch.tensor([correct_predictions]).to(device)
+            train_total = torch.tensor([total_samples]).to(device)
+            
+            dist.all_reduce(train_loss, op=dist.ReduceOp.SUM)
+            dist.all_reduce(train_correct, op=dist.ReduceOp.SUM)
+            dist.all_reduce(train_total, op=dist.ReduceOp.SUM)
+            
+            running_loss = train_loss.item()
+            correct_predictions = train_correct.item()
+            total_samples = train_total.item()
+
         train_accuracy = correct_predictions / total_samples
         train_loss = running_loss / len(train_loader)
         
-        # Log training metrics to wandb
-        wandb.log({
-            'train/loss': train_loss,
-            'train/accuracy': train_accuracy,
-            'train/epoch': epoch + 1
-        })
+        # Log metrics only from rank 0
+        if rank == 0:
+            wandb.log({
+                'train/loss': train_loss,
+                'train/accuracy': train_accuracy,
+                'train/epoch': epoch + 1
+            })
 
         # Validation phase
         model.eval()
@@ -199,12 +220,13 @@ def train_model(
         val_loss = val_loss / len(val_loader)
 
         # Log validation metrics to wandb
-        wandb.log({
-            'val/loss': val_loss,
-            'val/accuracy': val_accuracy,
-            'val/epoch': epoch + 1,
-            'learning_rate': optimizer.param_groups[0]['lr']
-        })
+        if rank == 0:
+            wandb.log({
+                'val/loss': val_loss,
+                'val/accuracy': val_accuracy,
+                'val/epoch': epoch + 1,
+                'learning_rate': optimizer.param_groups[0]['lr']
+            })
         
         # Step the scheduler based on validation loss
         scheduler.step(val_loss)
@@ -222,7 +244,7 @@ def train_model(
         best_val_accuracy = max(val_accuracy, best_val_accuracy)
         
         # Log best metrics to wandb
-        if is_best:
+        if is_best and rank == 0:
             wandb.run.summary['best_val_accuracy'] = best_val_accuracy
         
         # Prepare checkpoint
@@ -267,16 +289,18 @@ def train_model(
     test_accuracy = test_correct / total
     
     # Log final test metrics to wandb
-    wandb.run.summary.update({
-        'test/accuracy': test_accuracy,
-        'test/correct': test_correct,
-        'test/total': total,
-        'test/wrong': total - test_correct
-    })
+    if rank == 0:
+        wandb.run.summary.update({
+            'test/accuracy': test_accuracy,
+            'test/correct': test_correct,
+            'test/total': total,
+            'test/wrong': total - test_correct
+        })
     
     print(f"\nTest accuracy of the best model: {test_accuracy:.4f}\n")
 
-    # Finish the wandb run
-    wandb.finish()
+    # Only rank 0 should finish the wandb run
+    if rank == 0:
+        wandb.finish()
 
     return best_val_accuracy, test_accuracy

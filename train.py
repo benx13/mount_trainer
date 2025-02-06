@@ -9,60 +9,83 @@ import argparse
 from trainer import train_model
 from lebel_smooth import LabelSmoothingLoss
 from torch.amp import GradScaler, autocast
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
 
-def main(args):
-    # Initialize wandb
-    wandb.init(
-        project="mcunet-training",
-        config={
-            "net_id": args.net_id,
-            "learning_rate": args.learning_rate,
-            "batch_size": args.batch_size,
-            "epochs": args.epochs,
-            "val_split": args.val_split,
-            "test_split": args.test_split,
-            "seed": args.seed
-        }
-    )
+def setup(rank, world_size):
+    """Initialize distributed training environment."""
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+def cleanup():
+    """Clean up distributed training environment."""
+    dist.destroy_process_group()
+
+def train_process(rank, world_size, args):
+    """Process function for distributed training."""
+    setup(rank, world_size)
     
-    # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    wandb.config.update({"device": str(device)})
+    # Initialize wandb only on the main process
+    if rank == 0:
+        wandb.init(
+            project="mcunet-training",
+            config={
+                "net_id": args.net_id,
+                "learning_rate": args.learning_rate,
+                "batch_size": args.batch_size,
+                "epochs": args.epochs,
+                "val_split": args.val_split,
+                "test_split": args.test_split,
+                "seed": args.seed,
+                "num_gpus": world_size
+            }
+        )
+    
+    # Set device for this process
+    device = torch.device(f"cuda:{rank}")
+    torch.cuda.set_device(device)
+    
+    if rank == 0:
+        print(f"Using {world_size} GPUs for training")
+        wandb.config.update({"device": f"cuda (x{world_size})"})
 
     # Create model using build_model
     model, image_size, description = build_model(
         net_id=args.net_id,
         pretrained=True,
     )
-    print(f"Loaded model: {args.net_id}")
-    print(f"Image size: {image_size}")
-    print(f"Description: {description}")
+    
+    if rank == 0:
+        print(f"Loaded model: {args.net_id}")
+        print(f"Image size: {image_size}")
+        print(f"Description: {description}")
     
     model = model.to(device)
+    model = DDP(model, device_ids=[rank])
 
-    # Create data loaders
+    # Create data loaders with DDP support
     train_loader, val_loader, test_loader = create_data_loaders(
         data_dir=args.data_dir,
-        input_shape=(144, 144, 3),  # Model's expected input size
+        input_shape=(144, 144, 3),
         batch_size=args.batch_size,
         val_split=args.val_split,
         test_split=args.test_split,
         seed=args.seed,
         val_dir=args.val_dir,
-        test_dir=args.test_dir
+        test_dir=args.test_dir,
+        world_size=world_size,
+        rank=rank
     )
 
-    # Define loss function, optimizer and scheduler
-    #criterion = nn.CrossEntropyLoss()
     criterion = LabelSmoothingLoss(smoothing=0.05)
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', patience=5, factor=0.5, verbose=True
+        optimizer, mode='min', patience=5, factor=0.5, verbose=(rank == 0)
     )
-    scaler = GradScaler('cuda')  # Initialize GradScaler
+    scaler = GradScaler()
 
-    # Train the model using train_model function
     best_val_accuracy, test_accuracy = train_model(
         model=model,
         train_loader=train_loader,
@@ -78,12 +101,29 @@ def main(args):
         model_name=args.net_id,
         net_id=args.net_id,
         num_classes=2,
-        resume_training=args.resume_from is not None
+        resume_training=args.resume_from is not None,
+        rank=rank,
+        world_size=world_size
     )
 
-    print(f"\nTraining completed!")
-    print(f"Best validation accuracy: {best_val_accuracy:.2f}%")
-    print(f"Test accuracy: {test_accuracy:.2f}%")
+    cleanup()
+    return best_val_accuracy, test_accuracy
+
+def main(args):
+    if torch.cuda.is_available():
+        n_gpus = torch.cuda.device_count()
+        if n_gpus > 1:
+            mp.spawn(
+                train_process,
+                args=(n_gpus, args),
+                nprocs=n_gpus,
+                join=True
+            )
+        else:
+            train_process(0, 1, args)
+    else:
+        print("No GPU available. Running on CPU...")
+        train_process(0, 1, args)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train MCUNet model on Wake Vision dataset")

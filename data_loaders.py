@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import os
 from dataset import AlbumentationsDataset, TransformWrapper
+from torch.utils.data.distributed import DistributedSampler
 
 import albumentations as A
 import cv2
@@ -173,27 +174,12 @@ def create_data_loaders(
     num_workers=None,
     seed=42,
     val_dir=None,
-    test_dir=None
+    test_dir=None,
+    world_size=1,
+    rank=-1
 ):
     """
-    Creates data loaders for training, validation, and testing using data from disk in ImageNet format.
-    If val_dir and test_dir are provided, uses those directories for validation and test sets.
-    Otherwise, splits data_dir into train/val/test sets using the specified splits.
-    Uses Albumentations for data augmentation.
-
-    Args:
-        data_dir (str): Directory containing the training dataset in ImageNet format
-        input_shape (tuple): The desired input shape for images (height, width, channels)
-        batch_size (int): Batch size for data loaders
-        val_split (float): Fraction of data to use for validation when splitting (default: 0.1)
-        test_split (float): Fraction of data to use for testing when splitting (default: 0.1)
-        num_workers (int, optional): Number of workers for data loading. If None, uses CPU count
-        seed (int): Random seed for reproducibility
-        val_dir (str, optional): Directory containing validation dataset. If provided, val_split is ignored
-        test_dir (str, optional): Directory containing test dataset. If provided, test_split is ignored
-
-    Returns:
-        tuple: (train_loader, val_loader, test_loader) - PyTorch DataLoaders for each split
+    Creates data loaders with support for distributed training.
     """
     if not os.path.exists(data_dir):
         raise ValueError(f"Data directory {data_dir} does not exist")
@@ -265,19 +251,45 @@ def create_data_loaders(
 
     print(f"Classes: {sorted(train_classes)}")
     
-    # Create data loaders
+    # Create samplers for distributed training
+    train_sampler = DistributedSampler(
+        train_dataset,
+        num_replicas=world_size,
+        rank=rank,
+        shuffle=True,
+        seed=seed
+    ) if world_size > 1 else None
+
+    val_sampler = DistributedSampler(
+        val_dataset,
+        num_replicas=world_size,
+        rank=rank,
+        shuffle=False
+    ) if world_size > 1 else None
+
+    test_sampler = DistributedSampler(
+        test_dataset,
+        num_replicas=world_size,
+        rank=rank,
+        shuffle=False
+    ) if world_size > 1 else None
+
+    # Create data loaders with distributed samplers
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size, 
-        shuffle=True, 
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=True,
+        drop_last=True  # Important for DDP to avoid hanging
     )
     
     val_loader = DataLoader(
         val_dataset, 
         batch_size=batch_size, 
-        shuffle=False, 
+        shuffle=False,
+        sampler=val_sampler,
         num_workers=num_workers,
         pin_memory=True
     )
@@ -285,8 +297,9 @@ def create_data_loaders(
     test_loader = DataLoader(
         test_dataset, 
         batch_size=batch_size,
-        shuffle=False, 
-        num_workers=max(1, num_workers//2),  # Use fewer workers for test set
+        shuffle=False,
+        sampler=test_sampler,
+        num_workers=max(1, num_workers//2),
         pin_memory=True
     )
 
