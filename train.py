@@ -57,9 +57,27 @@ def main(args):
     #criterion = nn.CrossEntropyLoss()
     criterion = LabelSmoothingLoss(smoothing=0.15)
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.001)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=args.epochs, eta_min=0
+    # Create warmup scheduler (5% of total epochs for warmup)
+    warmup_epochs = max(3, int(0.05 * args.epochs))  # at least 3 epochs warmup
+    warmup_scheduler = optim.lr_scheduler.LinearLR(
+        optimizer, 
+        start_factor=0.1,  # start from 10% of initial lr
+        end_factor=1.0,
+        total_iters=warmup_epochs
     )
+    
+    # Cosine annealing scheduler for after warmup
+    cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, 
+        T_max=args.epochs - warmup_epochs,
+        eta_min=0
+    )
+    
+    # Chain the schedulers
+    scheduler = optim.lr_scheduler.ChainedScheduler([
+        warmup_scheduler,
+        cosine_scheduler
+    ])
     scaler = GradScaler('cuda')  # Initialize GradScaler
 
     # Train the model using train_model function

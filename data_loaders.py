@@ -52,7 +52,7 @@ def train_augmentation_pipeline(img_size: int):
             border_mode=cv2.BORDER_REFLECT_101,
             p=0.3
         ),
-
+        A.Affine(scale=(0.95, 1.05), translate_percent=(-0.02, 0.02), rotate=(-5, 5), shear=(-2, 2),p=0.1),
         # 6. Occasional random weather condition
         A.OneOf([
             A.RandomRain(
@@ -86,7 +86,7 @@ def train_augmentation_pipeline(img_size: int):
             min_holes=4,
             min_height=8,
             min_width=8,
-            p=0.25
+            p=0.15
         ),
 
         # 8. Normalize & convert to tensor
