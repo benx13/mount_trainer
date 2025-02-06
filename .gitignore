@@ -9,7 +9,7 @@
 *.pickle
 *.jpg
 *.csv
-
+*.zip
 # Model checkpoints and logs
 pytorch_checkpoints/
 *.pth
