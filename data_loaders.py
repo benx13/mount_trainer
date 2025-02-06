@@ -208,7 +208,7 @@ def create_data_loaders(
 
     # Calculate appropriate number of workers if not specified
     if num_workers is None:
-        num_workers = min(8, os.cpu_count() or 1)  # Use at most 8 workers
+        num_workers = min(16, os.cpu_count() or 1)  # Use at most 8 workers
 
     # Case 1: Using separate directories for validation and test
     if val_dir and test_dir:

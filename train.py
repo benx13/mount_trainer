@@ -56,9 +56,9 @@ def main(args):
     # Define loss function, optimizer and scheduler
     #criterion = nn.CrossEntropyLoss()
     criterion = LabelSmoothingLoss(smoothing=0.1)
-    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', patience=5, factor=0.5, verbose=True
+    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.001)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.epochs, eta_min=0
     )
     scaler = GradScaler('cuda')  # Initialize GradScaler
 
