@@ -33,7 +33,7 @@ def train_augmentation_pipeline(img_size: int):
                 A.ToGray(p=1.0),
                 A.CLAHE(clip_limit=(1.0, 4.0), tile_grid_size=(8, 8), p=1.0)
             ],
-            n=2,              # Pick exactly 1 transform to apply
+            n=1,              # Pick exactly 1 transform to apply
             p=0.4             # 40% chance to apply any color augmentation
         ),
 
@@ -50,9 +50,9 @@ def train_augmentation_pipeline(img_size: int):
             rotate_limit=10,      # up to +/-10 degrees
             interpolation=cv2.INTER_LINEAR,
             border_mode=cv2.BORDER_REFLECT_101,
-            p=0.3
+            p=0.2
         ),
-        A.Affine(scale=(0.95, 1.05), translate_percent=(-0.02, 0.02), rotate=(-5, 5), shear=(-2, 2),p=0.1),
+
         # 6. Occasional random weather condition
         A.OneOf([
             A.RandomRain(
@@ -76,7 +76,7 @@ def train_augmentation_pipeline(img_size: int):
                 angle_lower=0.5,
                 p=1.0
             ),
-        ], p=0.20),  # 15% chance of applying any weather effect
+        ], p=0.15),  # 15% chance of applying any weather effect
 
         # 7. Occasional Coarse Dropout
         A.CoarseDropout(
@@ -86,7 +86,7 @@ def train_augmentation_pipeline(img_size: int):
             min_holes=4,
             min_height=8,
             min_width=8,
-            p=0.15
+            p=0.2
         ),
 
         # 8. Normalize & convert to tensor
@@ -208,7 +208,7 @@ def create_data_loaders(
 
     # Calculate appropriate number of workers if not specified
     if num_workers is None:
-        num_workers = min(16, os.cpu_count() or 1)  # Use at most 8 workers
+        num_workers = min(8, os.cpu_count() or 1)  # Use at most 8 workers
 
     # Case 1: Using separate directories for validation and test
     if val_dir and test_dir:
