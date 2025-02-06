@@ -2,9 +2,7 @@ import os
 import cv2
 from tqdm import tqdm
 import multiprocessing as mp
-from functools import partial
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
 
 def check_image(image_path):
     """
@@ -61,24 +59,24 @@ def remove_corrupt_images(directory, num_workers=None):
     total_images = len(image_paths)
     print(f"Found {total_images} images to process")
 
+    if total_images == 0:
+        print("No images found in directory")
+        return
+
     # Process images in parallel
     corrupt_images = 0
-    chunk_size = max(1, min(1000, total_images // (num_workers * 4)))  # Optimize chunk size
+    chunk_size = max(1, min(1000, total_images // (num_workers * 4)))
 
     print("\nScanning for corrupt images...")
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+    
+    # Use multiprocessing Pool instead of ProcessPoolExecutor
+    with mp.Pool(processes=num_workers) as pool:
         # Create progress bar for completed tasks
         with tqdm(total=total_images, desc="Processing") as pbar:
-            # Submit all tasks
-            future_to_path = {
-                executor.submit(check_image, path): path 
-                for path in image_paths
-            }
-            
-            # Process completed tasks
-            for future in as_completed(future_to_path):
+            # Process images in chunks
+            for result in pool.imap_unordered(check_image, image_paths, chunksize=chunk_size):
                 pbar.update(1)
-                image_path, is_corrupt, error = future.result()
+                image_path, is_corrupt, error = result
                 
                 if is_corrupt:
                     try:
