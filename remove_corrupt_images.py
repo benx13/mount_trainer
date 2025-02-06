@@ -3,10 +3,11 @@ import cv2
 from tqdm import tqdm
 import multiprocessing as mp
 import time
+import imghdr
 
 def check_image(image_path):
     """
-    Check if an image is corrupt.
+    Check if an image is corrupt using fast validation.
     
     Args:
         image_path (str): Path to the image file
@@ -15,45 +16,53 @@ def check_image(image_path):
         tuple: (image_path, is_corrupt, error_message)
     """
     try:
-        img = cv2.imread(image_path)
-        if img is None or img.size == 0:
-            return image_path, True, "Image is None or empty"
+        # Quick file size check first
+        if os.path.getsize(image_path) < 100:  # Skip tiny files
+            return image_path, True, "File too small"
+            
+        # Fast header check
+        if imghdr.what(image_path) is None:
+            return image_path, True, "Invalid image format"
+            
+        # Quick image header read instead of full image load
+        img = cv2.imread(image_path, cv2.IMREAD_HEADER_ONLY)
+        if img is None:
+            return image_path, True, "Invalid image header"
+            
         return image_path, False, None
     except Exception as e:
         return image_path, True, str(e)
 
 def collect_image_paths(directory):
     """
-    Collect all image paths in the directory.
-    
-    Args:
-        directory (str): Directory to scan
-        
-    Returns:
-        list: List of image file paths
+    Collect all image paths in the directory with basic filtering.
     """
     image_paths = []
+    valid_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}
+    
     for root, _, files in os.walk(directory):
         for filename in files:
-            if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
-                image_paths.append(os.path.join(root, filename))
+            ext = os.path.splitext(filename.lower())[1]
+            if ext in valid_extensions:
+                full_path = os.path.join(root, filename)
+                # Quick size check during collection
+                try:
+                    if os.path.getsize(full_path) >= 100:
+                        image_paths.append(full_path)
+                except OSError:
+                    continue
     return image_paths
 
 def remove_corrupt_images(directory, num_workers=None):
     """
-    Parallel scan through a directory and remove any images that can't be opened with OpenCV.
-    
-    Args:
-        directory (str): Path to the directory containing images
-        num_workers (int, optional): Number of worker processes. Defaults to CPU count.
+    Parallel scan through a directory and remove corrupt images.
     """
     if not num_workers:
-        num_workers = mp.cpu_count()
+        num_workers = max(1, mp.cpu_count() - 1)  # Leave one CPU free
 
     print(f"Using {num_workers} workers")
     start_time = time.time()
 
-    # Collect all image paths first
     print("Collecting image paths...")
     image_paths = collect_image_paths(directory)
     total_images = len(image_paths)
@@ -63,17 +72,15 @@ def remove_corrupt_images(directory, num_workers=None):
         print("No images found in directory")
         return
 
-    # Process images in parallel
     corrupt_images = 0
-    chunk_size = max(1, min(1000, total_images // (num_workers * 4)))
+    # Larger chunk size for better performance
+    chunk_size = max(100, min(2000, total_images // num_workers))
 
     print("\nScanning for corrupt images...")
     
-    # Use multiprocessing Pool instead of ProcessPoolExecutor
     with mp.Pool(processes=num_workers) as pool:
-        # Create progress bar for completed tasks
         with tqdm(total=total_images, desc="Processing") as pbar:
-            # Process images in chunks
+            # Process images in larger chunks
             for result in pool.imap_unordered(check_image, image_paths, chunksize=chunk_size):
                 pbar.update(1)
                 image_path, is_corrupt, error = result
@@ -87,7 +94,9 @@ def remove_corrupt_images(directory, num_workers=None):
                     except OSError as e:
                         print(f"\nError removing {image_path}: {e}")
 
-    # Print summary with timing information
+                # Explicitly clear result to manage memory
+                del result
+
     elapsed_time = time.time() - start_time
     print("\nScan complete!")
     print(f"Total images processed: {total_images}")
