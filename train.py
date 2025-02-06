@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import wandb
-from lookahead import Lookahead
 from data_loaders import create_data_loaders
 from mcunet.model_zoo import build_model
 import argparse
@@ -57,31 +56,10 @@ def main(args):
     # Define loss function, optimizer and scheduler
     #criterion = nn.CrossEntropyLoss()
     criterion = LabelSmoothingLoss(smoothing=0.15)
-    # Create base optimizer
-    base_optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.002)
-    # Wrap with Lookahead
-    optimizer = Lookahead(base_optimizer, alpha=0.5, k=6)
-    # Create warmup scheduler (5% of total epochs for warmup)
-    warmup_epochs = max(3, int(0.05 * args.epochs))  # at least 3 epochs warmup
-    warmup_scheduler = optim.lr_scheduler.LinearLR(
-        optimizer, 
-        start_factor=0.1,  # start from 10% of initial lr
-        end_factor=1.0,
-        total_iters=warmup_epochs
+    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.001)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.epochs, eta_min=0
     )
-    
-    # Cosine annealing scheduler for after warmup
-    cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, 
-        T_max=args.epochs - warmup_epochs,
-        eta_min=0
-    )
-    
-    # Chain the schedulers
-    scheduler = optim.lr_scheduler.ChainedScheduler([
-        warmup_scheduler,
-        cosine_scheduler
-    ])
     scaler = GradScaler('cuda')  # Initialize GradScaler
 
     # Train the model using train_model function
