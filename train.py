@@ -78,7 +78,8 @@ def main(args):
         model_name=args.net_id,
         net_id=args.net_id,
         num_classes=2,
-        resume_training=args.resume_from is not None
+        resume_training=args.resume_from is not None,
+        mixup_alpha=args.mixup_alpha
     )
 
     print(f"\nTraining completed!")
@@ -99,6 +100,8 @@ if __name__ == "__main__":
     # Model arguments
     parser.add_argument("--net_id", type=str, default="mcunet-vww2",
                       help="Model ID from MCUNet model zoo")
+    parser.add_argument("--mixup-alpha", type=float, default=0.2,
+                      help="Alpha parameter for mixup augmentation (default: 0.2)")
     
     # Data arguments
     parser.add_argument("--data_dir", type=str, required=True,

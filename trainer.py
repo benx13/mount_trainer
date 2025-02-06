@@ -3,7 +3,8 @@ import torch.nn as nn
 from tqdm import tqdm
 import os
 import wandb
-from torch.amp import GradScaler, autocast # Import GradScaler and autocast
+from torch.amp import GradScaler, autocast
+from mixup import Mixup  # Import Mixup augmentation
 
 def save_checkpoint(state, is_best, output_dir, model_name):
     """Save model checkpoint and optionally log to wandb."""
@@ -89,7 +90,8 @@ def train_model(
     model_name,
     net_id,
     num_classes,
-    resume_training=False
+    resume_training=False,
+    mixup_alpha=0.2  # Mixup alpha parameter
 ):
     """
     Train a model with the given parameters and data loaders.
@@ -128,6 +130,9 @@ def train_model(
         start_epoch = 0
         best_val_accuracy = 0.0
 
+    # Initialize mixup
+    mixup = Mixup(alpha=mixup_alpha)
+    
     for epoch in range(start_epoch, epochs):
         # Training phase
         model.train()
@@ -144,9 +149,12 @@ def train_model(
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
 
+            # Apply mixup
+            mixed_images, target_a, target_b, lam = mixup(images, labels)
+
             with autocast('cuda'):
-                outputs = model(images)
-                loss = criterion(outputs, labels)
+                outputs = model(mixed_images)
+                loss = mixup.mix_criterion(criterion, outputs, target_a, target_b, lam)
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
