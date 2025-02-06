@@ -43,18 +43,7 @@ def load_and_save_dataset(
     false_negative_csv=None,
     min_box_area_percentage=5.0,
 ):
-    """
-    Load and save the entire Wake Vision dataset to disk with relabeling only, without sharding or dual save.
 
-    Args:
-        dataset_name (str): Name of the dataset on Hugging Face
-        split (str): Dataset split to use
-        false_positive_csv (str, optional): Path to CSV file containing false positives (human → no-human)
-        false_negative_csv (str, optional): Path to CSV file containing false negatives (no-human → human) with areas
-        min_box_area_percentage (float): Minimum box area as percentage of image size for false negatives
-    Returns:
-        str: Path to saved dataset directory
-    """
     # Load relabeling data if needed
     false_positives = set()
     false_negatives = {}
