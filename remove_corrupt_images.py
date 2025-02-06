@@ -20,10 +20,13 @@ def check_image(image_path):
         if os.path.getsize(image_path) < 100:  # Skip tiny files
             return image_path, True, "File too small"
             
-        # Quick image header read instead of full image load
-        img = cv2.imread(image_path, cv2.IMREAD_HEADER_ONLY)
+        # Read image with reduced size for speed
+        img = cv2.imread(image_path, cv2.IMREAD_REDUCED_COLOR_2)  # 1/2 resolution
         if img is None:
-            return image_path, True, "Invalid image header"
+            # Double check with full read in case of false positive
+            img = cv2.imread(image_path)
+            if img is None:
+                return image_path, True, "Cannot read image"
             
         return image_path, False, None
     except Exception as e:
