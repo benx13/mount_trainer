@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import wandb
+from lookahead import Lookahead
 from data_loaders import create_data_loaders
 from mcunet.model_zoo import build_model
 import argparse
@@ -56,7 +57,10 @@ def main(args):
     # Define loss function, optimizer and scheduler
     #criterion = nn.CrossEntropyLoss()
     criterion = LabelSmoothingLoss(smoothing=0.15)
-    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.001)
+    # Create base optimizer
+    base_optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.002)
+    # Wrap with Lookahead
+    optimizer = Lookahead(base_optimizer, alpha=0.5, k=6)
     # Create warmup scheduler (5% of total epochs for warmup)
     warmup_epochs = max(3, int(0.05 * args.epochs))  # at least 3 epochs warmup
     warmup_scheduler = optim.lr_scheduler.LinearLR(
