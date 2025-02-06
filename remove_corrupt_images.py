@@ -3,7 +3,7 @@ import cv2
 from tqdm import tqdm
 import multiprocessing as mp
 import time
-import imghdr
+from pathlib import Path
 
 def check_image(image_path):
     """
@@ -20,10 +20,6 @@ def check_image(image_path):
         if os.path.getsize(image_path) < 100:  # Skip tiny files
             return image_path, True, "File too small"
             
-        # Fast header check
-        if imghdr.what(image_path) is None:
-            return image_path, True, "Invalid image format"
-            
         # Quick image header read instead of full image load
         img = cv2.imread(image_path, cv2.IMREAD_HEADER_ONLY)
         if img is None:
@@ -33,24 +29,51 @@ def check_image(image_path):
     except Exception as e:
         return image_path, True, str(e)
 
-def collect_image_paths(directory):
+def collect_images_from_subdir(args):
     """
-    Collect all image paths in the directory with basic filtering.
+    Collect image paths from a subdirectory.
     """
+    subdir, valid_extensions = args
     image_paths = []
+    
+    try:
+        for entry in os.scandir(subdir):
+            if entry.is_file():
+                ext = os.path.splitext(entry.name.lower())[1]
+                if ext in valid_extensions:
+                    try:
+                        if os.path.getsize(entry.path) >= 100:
+                            image_paths.append(entry.path)
+                    except OSError:
+                        continue
+    except Exception:
+        pass
+    
+    return image_paths
+
+def collect_image_paths(directory, num_workers):
+    """
+    Collect all image paths in the directory with parallel processing.
+    """
     valid_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}
     
-    for root, _, files in os.walk(directory):
-        for filename in files:
-            ext = os.path.splitext(filename.lower())[1]
-            if ext in valid_extensions:
-                full_path = os.path.join(root, filename)
-                # Quick size check during collection
-                try:
-                    if os.path.getsize(full_path) >= 100:
-                        image_paths.append(full_path)
-                except OSError:
-                    continue
+    # Get all subdirectories including the root
+    subdirs = [directory]
+    for root, dirs, _ in os.walk(directory):
+        subdirs.extend(os.path.join(root, d) for d in dirs)
+    
+    print(f"Scanning {len(subdirs)} directories...")
+    
+    # Process subdirectories in parallel
+    args_list = [(subdir, valid_extensions) for subdir in subdirs]
+    
+    image_paths = []
+    with mp.Pool(processes=num_workers) as pool:
+        with tqdm(total=len(subdirs), desc="Collecting paths") as pbar:
+            for result in pool.imap_unordered(collect_images_from_subdir, args_list):
+                image_paths.extend(result)
+                pbar.update(1)
+    
     return image_paths
 
 def remove_corrupt_images(directory, num_workers=None):
@@ -64,7 +87,7 @@ def remove_corrupt_images(directory, num_workers=None):
     start_time = time.time()
 
     print("Collecting image paths...")
-    image_paths = collect_image_paths(directory)
+    image_paths = collect_image_paths(directory, num_workers)
     total_images = len(image_paths)
     print(f"Found {total_images} images to process")
 
@@ -80,7 +103,6 @@ def remove_corrupt_images(directory, num_workers=None):
     
     with mp.Pool(processes=num_workers) as pool:
         with tqdm(total=total_images, desc="Processing") as pbar:
-            # Process images in larger chunks
             for result in pool.imap_unordered(check_image, image_paths, chunksize=chunk_size):
                 pbar.update(1)
                 image_path, is_corrupt, error = result
@@ -94,7 +116,6 @@ def remove_corrupt_images(directory, num_workers=None):
                     except OSError as e:
                         print(f"\nError removing {image_path}: {e}")
 
-                # Explicitly clear result to manage memory
                 del result
 
     elapsed_time = time.time() - start_time
