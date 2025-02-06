@@ -207,7 +207,7 @@ def train_model(
         })
         
         # Step the scheduler based on validation loss
-        scheduler.step(val_loss)
+        scheduler.step()
         current_lr = optimizer.param_groups[0]['lr']
 
         print(f"Epoch [{epoch+1}/{epochs}], "
