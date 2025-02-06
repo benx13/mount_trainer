@@ -1,11 +1,6 @@
-# language:download_full.py
-from ultralytics import YOLO
-import json
-import cv2
 import numpy as np
 from tqdm import tqdm
 from datasets import load_dataset
-import torch
 import os
 from huggingface_hub import HfApi, get_token
 from datasets import config
