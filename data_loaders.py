@@ -33,7 +33,7 @@ def train_augmentation_pipeline(img_size: int):
                 A.ToGray(p=1.0),
                 A.CLAHE(clip_limit=(1.0, 4.0), tile_grid_size=(8, 8), p=1.0)
             ],
-            n=1,              # Pick exactly 1 transform to apply
+            n=2,              # Pick exactly 1 transform to apply
             p=0.4             # 40% chance to apply any color augmentation
         ),
 
@@ -50,7 +50,7 @@ def train_augmentation_pipeline(img_size: int):
             rotate_limit=10,      # up to +/-10 degrees
             interpolation=cv2.INTER_LINEAR,
             border_mode=cv2.BORDER_REFLECT_101,
-            p=0.2
+            p=0.3
         ),
 
         # 6. Occasional random weather condition
@@ -76,7 +76,7 @@ def train_augmentation_pipeline(img_size: int):
                 angle_lower=0.5,
                 p=1.0
             ),
-        ], p=0.15),  # 15% chance of applying any weather effect
+        ], p=0.20),  # 15% chance of applying any weather effect
 
         # 7. Occasional Coarse Dropout
         A.CoarseDropout(
@@ -86,7 +86,7 @@ def train_augmentation_pipeline(img_size: int):
             min_holes=4,
             min_height=8,
             min_width=8,
-            p=0.2
+            p=0.25
         ),
 
         # 8. Normalize & convert to tensor
