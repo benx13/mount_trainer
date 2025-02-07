@@ -4,6 +4,7 @@ from tqdm import tqdm
 import os
 import wandb
 from torch.amp import GradScaler, autocast # Import GradScaler and autocast
+import torch.backends.cudnn as cudnn
 
 def save_checkpoint(state, is_best, output_dir, model_name):
     """Save model checkpoint and optionally log to wandb."""
@@ -82,7 +83,6 @@ def train_model(
     criterion,
     optimizer,
     scheduler,
-    scaler,
     device,
     epochs,
     output_dir,
@@ -113,6 +113,9 @@ def train_model(
         float: Best validation accuracy achieved
         float: Test accuracy of the best model
     """
+    # Enable cuDNN benchmarking for better performance
+    cudnn.benchmark = True
+    
     # Initialize best accuracy and start epoch
     latest_checkpoint = os.path.join(output_dir, f"{model_name}_latest.pth")
     if resume_training and os.path.exists(latest_checkpoint):
@@ -120,8 +123,7 @@ def train_model(
             latest_checkpoint,
             model,
             optimizer=optimizer,
-            scheduler=scheduler,
-            scaler=scaler
+            scheduler=scheduler
         )
         print(f"Resuming training from epoch {start_epoch} with best validation accuracy: {best_val_accuracy:.4f}")
     else:
@@ -129,38 +131,33 @@ def train_model(
         best_val_accuracy = 0.0
 
     for epoch in range(start_epoch, epochs):
-        # Training phase
         model.train()
         running_loss = 0.0
         correct_predictions = 0
         total_samples = 0
         
-        # Create progress bar
-        train_pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{epochs} [Train]')
-
-        train_loop = tqdm(train_loader, leave=False)
+        train_loop = tqdm(train_loader, desc=f'Epoch {epoch+1}/{epochs} [Train]')
         for images, labels in train_loop:
-            
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
 
-            with autocast('cuda'):
-                outputs = model(images)
-                loss = criterion(outputs, labels)
-
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-
-            running_loss += loss.item()
+            # Remove autocast and directly compute forward pass
+            outputs = model(images)
+            loss = criterion(outputs, labels)
             _, predicted = torch.max(outputs.data, 1)
+
+            # Regular backward pass without scaler
+            loss.backward()
+            optimizer.step()
+
+            # Update metrics
+            running_loss += loss.item()
             total_samples += labels.size(0)
             correct_predictions += (predicted == labels).sum().item()
 
-            train_loop.set_description(f"Epoch [{epoch+1}/{epochs}]")
             train_loop.set_postfix(
-                train_loss=running_loss / (train_loop.n + 1e-5),
-                train_acc=correct_predictions / total_samples
+                loss=running_loss / (train_loop.n + 1),
+                acc=correct_predictions / total_samples
             )
 
         train_accuracy = correct_predictions / total_samples
@@ -227,11 +224,10 @@ def train_model(
         
         # Prepare checkpoint
         checkpoint = {
-            'epoch': epoch + 1,  # Save next epoch to resume from
+            'epoch': epoch + 1,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'scheduler_state_dict': scheduler.state_dict(),
-            'scaler_state_dict': scaler.state_dict(),
             'best_val_accuracy': best_val_accuracy,
             'val_accuracy': val_accuracy,
             'train_accuracy': train_accuracy,
