@@ -8,7 +8,7 @@ from mcunet.model_zoo import build_model
 import argparse
 from trainer import train_model
 from lebel_smooth import LabelSmoothingLoss
-# from torch.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 
 def main(args):
     # Initialize wandb
@@ -30,6 +30,10 @@ def main(args):
     print(f"Using device: {device}")
     wandb.config.update({"device": str(device)})
 
+    # Enable cuDNN benchmarking and deterministic mode
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.deterministic = False
+    
     # Create model using build_model
     model, image_size, description = build_model(
         net_id=args.net_id,
@@ -39,7 +43,27 @@ def main(args):
     print(f"Image size: {image_size}")
     print(f"Description: {description}")
     
-    model = model.to(device)
+    # Use channels_last memory format for better performance on NVIDIA GPUs
+    model = model.to(device, memory_format=torch.channels_last)
+
+    if torch.cuda.is_available() and hasattr(torch, 'compile'):
+        model = torch.compile(model)  # PyTorch 2.0+ optimization
+
+    # Enable gradient checkpointing if model supports it
+    if hasattr(model, 'gradient_checkpointing_enable'):
+        model.gradient_checkpointing_enable()
+
+    # Optimize batch size and workers based on GPU memory
+    if torch.cuda.is_available():
+        gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
+        suggested_batch_size = min(args.batch_size, int(gpu_mem * 4))  # Rough estimate
+        suggested_workers = min(os.cpu_count(), int(gpu_mem * 2))
+        
+        args.batch_size = suggested_batch_size
+        args.num_workers = suggested_workers
+        
+        print(f"Optimized batch size: {args.batch_size}")
+        print(f"Optimized num workers: {args.num_workers}")
 
     # Create data loaders
     train_loader, val_loader, test_loader = create_data_loaders(
@@ -60,7 +84,7 @@ def main(args):
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', patience=5, factor=0.5, verbose=True
     )
-    # scaler = GradScaler()
+    scaler = GradScaler('cuda')  # Initialize GradScaler
 
     # Train the model using train_model function
     best_val_accuracy, test_accuracy = train_model(
@@ -71,6 +95,7 @@ def main(args):
         criterion=criterion,
         optimizer=optimizer,
         scheduler=scheduler,
+        scaler=scaler,
         device=device,
         epochs=args.epochs,
         output_dir=args.checkpoint_dir,

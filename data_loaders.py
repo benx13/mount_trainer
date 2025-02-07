@@ -7,8 +7,6 @@ import numpy as np
 import os
 from dataset import AlbumentationsDataset, TransformWrapper
 
-
-
 import albumentations as A
 import cv2
 from albumentations.pytorch import ToTensorV2
@@ -172,7 +170,7 @@ def create_data_loaders(
     batch_size,
     val_split=0.1,
     test_split=0.1,
-    num_workers=None,
+    num_workers=32,
     seed=42,
     val_dir=None,
     test_dir=None
@@ -209,8 +207,8 @@ def create_data_loaders(
     val_transform = get_augmentation_pipeline(train=False, img_size=input_shape[0])
 
     # Calculate appropriate number of workers if not specified
-    if num_workers is None:
-        num_workers = min(8, os.cpu_count() or 1)  # Use at most 8 workers
+    # if num_workers is None:
+    #     num_workers = min(8, os.cpu_count() or 1)  # Use at most 8 workers
 
     # Case 1: Using separate directories for validation and test
     if val_dir and test_dir:
@@ -273,23 +271,29 @@ def create_data_loaders(
         batch_size=batch_size, 
         shuffle=True, 
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=True,
+        persistent_workers=True,  # Keep workers alive between epochs
+        prefetch_factor=2,       # Number of batches loaded in advance by each worker
     )
     
     val_loader = DataLoader(
         val_dataset, 
-        batch_size=batch_size, 
+        batch_size=batch_size * 2,  # Can use larger batch size for validation
         shuffle=False, 
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2,
     )
     
     test_loader = DataLoader(
         test_dataset, 
-        batch_size=batch_size,
+        batch_size=batch_size * 2,  # Can use larger batch size for testing
         shuffle=False, 
-        num_workers=max(1, num_workers//2),  # Use fewer workers for test set
-        pin_memory=True
+        num_workers=max(1, num_workers//2),
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2,
     )
 
     return train_loader, val_loader, test_loader

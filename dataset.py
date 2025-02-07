@@ -11,25 +11,27 @@ class AlbumentationsDataset(Dataset):
         self.classes = sorted(os.listdir(root_dir))
         self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
         
+        # Preload all file paths at init
         self.samples = []
         for class_name in self.classes:
             class_dir = os.path.join(root_dir, class_name)
             if not os.path.isdir(class_dir):
                 continue
-            for filename in os.listdir(class_dir):
-                if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-                    self.samples.append((
-                        os.path.join(class_dir, filename),
-                        self.class_to_idx[class_name]
-                    ))
+            class_idx = self.class_to_idx[class_name]
+            # Use list comprehension for faster file collection
+            self.samples.extend([
+                (os.path.join(class_dir, filename), class_idx)
+                for filename in os.listdir(class_dir)
+                if filename.lower().endswith(('.png', '.jpg', '.jpeg'))
+            ])
     
     def __len__(self):
         return len(self.samples)
     
     def __getitem__(self, idx):
         img_path, label = self.samples[idx]
-        # Read image using cv2
-        image = cv2.imread(img_path)
+        # Use IMREAD_COLOR flag for faster reading
+        image = cv2.imread(img_path, cv2.IMREAD_COLOR)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         
         if self.transform:
