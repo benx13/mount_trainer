@@ -7,29 +7,12 @@ import multiprocessing as mp
 from tqdm import tqdm
 from functools import partial
 import numpy as np
-import mmap
 import pickle
 import lmdb
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-def validate_image(img_path):
-    """Validate a single image file"""
-    try:
-        # Quick file size check first
-        if os.path.getsize(img_path) < 100:  # Skip tiny files
-            return None, f"File too small: {img_path}"
-            
-        # Read image header only first for speed
-        img = cv2.imread(img_path, cv2.IMREAD_REDUCED_COLOR_2)
-        if img is None:
-            return None, f"Cannot read image: {img_path}"
-            
-        return img_path, None
-    except Exception as e:
-        return None, f"Error reading {img_path}: {str(e)}"
 
 def process_class_dir(args):
     """Process all images in a class directory"""
@@ -42,12 +25,20 @@ def process_class_dir(args):
         if filename.name.lower().endswith(('.png', '.jpg', '.jpeg')):
             total += 1
             img_path = filename.path
-            path, error = validate_image(img_path)
-            if path:
-                valid_samples.append((path, class_idx))
-            else:
+            try:
+                # Validate image
+                img = cv2.imread(img_path)
+                if img is None or img.size == 0:
+                    skipped += 1
+                    continue
+                
+                # Store image path and class
+                valid_samples.append((img_path, class_idx))
+                
+            except Exception as e:
+                logger.warning(f"Error processing {img_path}: {str(e)}")
                 skipped += 1
-                logger.warning(error)
+                continue
     
     return valid_samples, skipped, total
 
@@ -66,32 +57,33 @@ class CachedImageDataset(Dataset):
         if num_workers is None:
             num_workers = min(128, os.cpu_count() or 1)
         
-        # Try to load cached metadata
+        # Initialize dataset
+        self._initialize_dataset(num_workers, skip_corrupt)
+        
+        # Initialize LMDB environment
+        self.env = lmdb.open(
+            self.lmdb_path,
+            readonly=True,
+            lock=False,
+            readahead=False,
+            meminit=False,
+            map_size=1099511627776 * 2  # 2TB map size
+        )
+        
+    def _initialize_dataset(self, num_workers, skip_corrupt):
+        """Initialize the dataset and create cache if needed"""
+        self.classes = sorted(os.listdir(self.root_dir))
+        self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
+        
+        # Check if cache exists
         if os.path.exists(self.meta_path) and os.path.exists(self.lmdb_path):
             logger.info("Loading cached dataset metadata...")
             with open(self.meta_path, 'rb') as f:
                 cached_data = pickle.load(f)
                 self.samples = cached_data['samples']
-                self.classes = cached_data['classes']
-                self.class_to_idx = cached_data['class_to_idx']
             logger.info(f"Loaded {len(self.samples)} samples from cache")
-        else:
-            # Initialize from scratch
-            logger.info("Building dataset cache...")
-            self._initialize_dataset(num_workers, skip_corrupt)
-        
-        # Initialize LMDB environment
-        self.env = lmdb.open(self.lmdb_path, 
-                           readonly=True, 
-                           lock=False,
-                           readahead=False, 
-                           meminit=False,
-                           map_size=1099511627776 * 2)  # 2TB map size
-        
-    def _initialize_dataset(self, num_workers, skip_corrupt):
-        self.classes = sorted(os.listdir(self.root_dir))
-        self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
-        
+            return
+
         # Prepare arguments for parallel processing
         class_dirs = [
             (os.path.join(self.root_dir, class_name), self.class_to_idx[class_name])
@@ -99,27 +91,46 @@ class CachedImageDataset(Dataset):
             if os.path.isdir(os.path.join(self.root_dir, class_name))
         ]
         
-        # Process class directories and build cache in parallel
+        # Process class directories in parallel
         self.samples = []
         total_skipped = 0
         total_images = 0
         
-        # Create LMDB environment for writing
-        map_size = 1099511627776 * 2  # 2TB map size
-        env = lmdb.open(self.lmdb_path, map_size=map_size)
-        
-        logger.info(f"Scanning and caching dataset using {num_workers} workers...")
+        logger.info(f"Scanning dataset using {num_workers} workers...")
         with mp.Pool(processes=num_workers) as pool:
-            with env.begin(write=True) as txn:
-                for result in tqdm(
-                    pool.imap_unordered(partial(process_and_cache_class_dir, txn=txn), class_dirs),
-                    total=len(class_dirs),
-                    desc="Building cache"
-                ):
-                    valid_samples, skipped, total = result
-                    self.samples.extend(valid_samples)
-                    total_skipped += skipped
-                    total_images += total
+            results = []
+            for result in tqdm(
+                pool.imap_unordered(process_class_dir, class_dirs),
+                total=len(class_dirs),
+                desc="Loading dataset"
+            ):
+                valid_samples, skipped, total = result
+                self.samples.extend(valid_samples)
+                total_skipped += skipped
+                total_images += total
+        
+        if total_skipped > 0:
+            logger.info(f"Skipped {total_skipped} corrupt/empty images out of {total_images} total images")
+        
+        # Create LMDB cache
+        logger.info("Creating LMDB cache...")
+        env = lmdb.open(self.lmdb_path, map_size=1099511627776 * 2)
+        
+        with env.begin(write=True) as txn:
+            for idx, (img_path, class_idx) in enumerate(tqdm(self.samples, desc="Caching images")):
+                try:
+                    # Read and encode image
+                    img = cv2.imread(img_path)
+                    success, buf = cv2.imencode('.jpg', img)
+                    if not success:
+                        continue
+                    
+                    # Store in LMDB
+                    key = f"{idx}".encode()
+                    txn.put(key, buf.tobytes())
+                except Exception as e:
+                    logger.warning(f"Error caching {img_path}: {str(e)}")
+                    continue
         
         # Save metadata
         with open(self.meta_path, 'wb') as f:
@@ -129,21 +140,20 @@ class CachedImageDataset(Dataset):
                 'class_to_idx': self.class_to_idx
             }, f)
         
-        if total_skipped > 0:
-            logger.info(f"Skipped {total_skipped} corrupt/empty images out of {total_images} total images")
         logger.info(f"Successfully cached {len(self.samples)} valid images")
     
     def __len__(self):
         return len(self.samples)
     
     def __getitem__(self, idx):
-        img_key, label = self.samples[idx]
+        img_path, label = self.samples[idx]
         
         try:
             # Read image from LMDB
             with self.env.begin(write=False) as txn:
-                imgbuf = txn.get(img_key.encode())
-            
+                key = f"{idx}".encode()
+                imgbuf = txn.get(key)
+                
             # Decode image
             buf = np.frombuffer(imgbuf, dtype=np.uint8)
             img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
@@ -156,44 +166,8 @@ class CachedImageDataset(Dataset):
             return img, label
             
         except Exception as e:
-            logger.error(f"Error loading image {img_key}: {str(e)}")
+            logger.error(f"Error loading image {img_path}: {str(e)}")
             return self.__getitem__((idx + 1) % len(self))
-
-def process_and_cache_class_dir(args, txn):
-    """Process and cache all images in a class directory"""
-    class_dir, class_idx = args
-    valid_samples = []
-    skipped = 0
-    total = 0
-    
-    for filename in os.scandir(class_dir):
-        if filename.name.lower().endswith(('.png', '.jpg', '.jpeg')):
-            total += 1
-            img_path = filename.path
-            try:
-                # Validate and cache image
-                img = cv2.imread(img_path)
-                if img is None or img.size == 0:
-                    skipped += 1
-                    continue
-                
-                # Encode image for LMDB storage
-                success, buf = cv2.imencode('.jpg', img)
-                if not success:
-                    skipped += 1
-                    continue
-                
-                # Store in LMDB
-                key = img_path.encode()
-                txn.put(key, buf.tobytes())
-                
-                valid_samples.append((img_path, class_idx))
-            except Exception as e:
-                logger.warning(f"Error processing {img_path}: {str(e)}")
-                skipped += 1
-                continue
-    
-    return valid_samples, skipped, total
 
 class AlbumentationsDataset(Dataset):
     """Custom dataset that uses Albumentations for augmentation"""
