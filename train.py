@@ -79,7 +79,8 @@ def train_process(rank, world_size, args):
         test_dir=args.test_dir,
         world_size=world_size,
         rank=rank,
-        cache_dir=args.cache_dir
+        cache_dir=args.cache_dir,
+        num_workers=args.num_workers
     )
 
     criterion = LabelSmoothingLoss(smoothing=0.05)
@@ -201,6 +202,10 @@ if __name__ == "__main__":
                       help="Number of epochs for learning rate warmup")
     parser.add_argument("--weight_decay", type=float, default=0.05,
                       help="Weight decay coefficient")
+
+    # Data loading arguments
+    parser.add_argument("--num_workers", type=int, default=None,
+                      help="Number of worker processes for data loading (default: auto)")
 
     args = parser.parse_args()
     
