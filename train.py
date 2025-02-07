@@ -56,11 +56,11 @@ def main(args):
     # Optimize batch size and workers based on GPU memory
     if torch.cuda.is_available():
         gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
-        suggested_batch_size = min(args.batch_size, int(gpu_mem * 4))  # Rough estimate
-        suggested_workers = min(os.cpu_count(), int(gpu_mem * 2))
+        #suggested_batch_size = min(args.batch_size, int(gpu_mem * 4))  # Rough estimate
+        #suggested_workers = min(os.cpu_count(), int(gpu_mem * 2))
         
-        args.batch_size = 512#suggested_batch_size
-        args.num_workers = suggested_workers
+        #args.batch_size = 512#suggested_batch_size
+        #args.num_workers = suggested_workers
         
         print(f"Optimized batch size: {args.batch_size}")
         print(f"Optimized num workers: {args.num_workers}")
@@ -137,6 +137,8 @@ if __name__ == "__main__":
                       help="Fraction of data to use for testing when test_dir is not provided")
     
     # Training arguments
+    parser.add_argument("--batch_size", type=int, default=32,
+                      help="Batch size for training")
     parser.add_argument("--batch_size", type=int, default=32,
                       help="Batch size for training")
     parser.add_argument("--epochs", type=int, default=100,
