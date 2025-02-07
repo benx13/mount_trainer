@@ -59,7 +59,7 @@ def main(args):
         suggested_batch_size = min(args.batch_size, int(gpu_mem * 4))  # Rough estimate
         suggested_workers = min(os.cpu_count(), int(gpu_mem * 2))
         
-        args.batch_size = suggested_batch_size
+        args.batch_size = 512#suggested_batch_size
         args.num_workers = suggested_workers
         
         print(f"Optimized batch size: {args.batch_size}")
