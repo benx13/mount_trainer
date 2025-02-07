@@ -139,28 +139,25 @@ def create_data_loaders(
     train_transform = train_augmentation_pipeline(input_shape[0])
     val_transform = val_augmentation_pipeline(input_shape[0])
     
-    # Create datasets with caching
+    # Create datasets without caching
     if val_dir and test_dir:
-        train_dataset = CachedImageDataset(
+        train_dataset = AlbumentationsDataset(
             data_dir, 
             transform=train_transform, 
             skip_corrupt=True,
-            num_workers=num_workers,
-            cache_dir=os.path.join(cache_dir or '.cache', 'train')
+            num_workers=num_workers
         )
-        val_dataset = CachedImageDataset(
+        val_dataset = AlbumentationsDataset(
             val_dir, 
             transform=val_transform, 
             skip_corrupt=True,
-            num_workers=num_workers,
-            cache_dir=os.path.join(cache_dir or '.cache', 'val')
+            num_workers=num_workers
         )
-        test_dataset = CachedImageDataset(
+        test_dataset = AlbumentationsDataset(
             test_dir, 
             transform=val_transform, 
             skip_corrupt=True,
-            num_workers=num_workers,
-            cache_dir=os.path.join(cache_dir or '.cache', 'test')
+            num_workers=num_workers
         )
         
         print(f"\nUsing separate directories for validation and test sets:")
@@ -171,7 +168,12 @@ def create_data_loaders(
     # Case 2: Split single directory into train/val/test
     else:
         # Load the full dataset
-        full_dataset = CachedImageDataset(data_dir, transform=val_transform, skip_corrupt=True)
+        full_dataset = AlbumentationsDataset(
+            data_dir, 
+            transform=val_transform, 
+            skip_corrupt=True,
+            num_workers=num_workers
+        )
         
         # Calculate split sizes
         total_size = len(full_dataset)
