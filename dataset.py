@@ -208,12 +208,25 @@ class AlbumentationsDataset(Dataset):
             if not os.path.isdir(class_dir):
                 continue
             
+            # Read images in binary mode for faster loading
             for filename in os.listdir(class_dir):
                 if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
                     img_path = os.path.join(class_dir, filename)
                     self.samples.append((img_path, self.class_to_idx[class_name]))
         
         logger.info(f"Found {len(self.samples)} images across {len(self.classes)} classes")
+        
+        # Pre-load images into memory if dataset is small enough
+        self.preloaded = {}
+        total_size_gb = len(self.samples) * 0.5  # Estimate 0.5MB per image
+        if total_size_gb < 32:  # If dataset would take less than 32GB RAM
+            logger.info("Pre-loading images into memory...")
+            for idx, (img_path, _) in enumerate(self.samples):
+                try:
+                    with open(img_path, 'rb') as f:
+                        self.preloaded[idx] = f.read()
+                except Exception as e:
+                    logger.error(f"Error pre-loading {img_path}: {str(e)}")
     
     def __len__(self):
         return len(self.samples)
@@ -221,8 +234,15 @@ class AlbumentationsDataset(Dataset):
     def __getitem__(self, idx):
         img_path, label = self.samples[idx]
         try:
-            # Read image using cv2
-            image = cv2.imread(img_path)
+            # Use pre-loaded image if available
+            if idx in self.preloaded:
+                img_binary = self.preloaded[idx]
+                img_array = np.frombuffer(img_binary, dtype=np.uint8)
+                image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            else:
+                # Fast image loading
+                image = cv2.imread(img_path)
+            
             if image is None:
                 raise ValueError(f"Failed to load image: {img_path}")
             
@@ -236,7 +256,6 @@ class AlbumentationsDataset(Dataset):
             
         except Exception as e:
             logger.error(f"Error loading image {img_path}: {str(e)}")
-            # Return a different sample as fallback
             return self.__getitem__((idx + 1) % len(self))
 
 class TransformWrapper(Dataset):

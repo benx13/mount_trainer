@@ -129,10 +129,10 @@ def create_data_loaders(
     
     # Optimize number of workers per GPU
     if num_workers is None:
-        num_workers = min(16, os.cpu_count() // world_size)  # Workers per GPU
+        num_workers = 4  # Reduced workers per GPU to prevent I/O bottleneck
     
     # Increase prefetch factor for better GPU utilization
-    prefetch_factor = 8  # Fetch more samples per worker
+    prefetch_factor = 2  # Reduced to prevent memory pressure
     
     # Pin memory for faster data transfer to GPU
     pin_memory = True
@@ -245,7 +245,7 @@ def create_data_loaders(
         batch_size=batch_size,
         shuffle=(train_sampler is None),
         sampler=train_sampler,
-        num_workers=num_workers,  # Workers per GPU
+        num_workers=num_workers,
         pin_memory=pin_memory,
         persistent_workers=persistent_workers,
         prefetch_factor=prefetch_factor,
