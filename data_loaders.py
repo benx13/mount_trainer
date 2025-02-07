@@ -7,6 +7,10 @@ import numpy as np
 import os
 from dataset import AlbumentationsDataset, TransformWrapper
 
+import albumentations as A
+import cv2
+from albumentations.pytorch import ToTensorV2
+
 def train_augmentation_pipeline(img_size: int):
     return A.Compose([
         # 1. Always crop & resize to target dimensions
@@ -269,7 +273,7 @@ def create_data_loaders(
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True,  # Keep workers alive between epochs
-        prefetch_factor=4,       # Number of batches loaded in advance by each worker
+        prefetch_factor=2,       # Number of batches loaded in advance by each worker
     )
     
     val_loader = DataLoader(
@@ -279,7 +283,7 @@ def create_data_loaders(
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True,
-        prefetch_factor=4,
+        prefetch_factor=2,
     )
     
     test_loader = DataLoader(
@@ -289,7 +293,7 @@ def create_data_loaders(
         num_workers=max(1, num_workers//2),
         pin_memory=True,
         persistent_workers=True,
-        prefetch_factor=4,
+        prefetch_factor=2,
     )
 
     return train_loader, val_loader, test_loader

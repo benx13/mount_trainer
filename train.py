@@ -30,11 +30,9 @@ def main(args):
     print(f"Using device: {device}")
     wandb.config.update({"device": str(device)})
 
-    # Enable cuDNN benchmarking and TF32 for faster training on one GPU
+    # Enable cuDNN benchmarking and deterministic mode
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = False
-    torch.backends.cudnn.allow_tf32 = True
-    torch.backends.cuda.matmul.allow_tf32 = True
     
     # Create model using build_model
     model, image_size, description = build_model(
@@ -86,7 +84,7 @@ def main(args):
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', patience=5, factor=0.5, verbose=True
     )
-    scaler = GradScaler('cuda')  # Initialize GradScaler without extra device args
+    scaler = GradScaler('cuda')  # Initialize GradScaler
 
     # Train the model using train_model function
     best_val_accuracy, test_accuracy = train_model(
