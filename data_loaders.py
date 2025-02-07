@@ -264,22 +264,30 @@ def create_data_loaders(
         raise ValueError("Classes are not consistent across train, validation, and test sets")
 
     print(f"Classes: {sorted(train_classes)}")
-    
     # For the training dataset, use DistributedSampler if distributed training is enabled
+    if local_rank == 0:
+        print(f"Train dataset length: {len(train_dataset)}, Sampler length: {len(train_sampler)}")
+
     if distributed:
-        train_sampler = DistributedSampler(train_dataset, num_replicas=torch.distributed.get_world_size(), rank=local_rank, shuffle=True, seed=seed)
-        shuffle_flag = False  # Shuffling is handled by the sampler
+        train_sampler = DistributedSampler(
+            train_dataset,
+            num_replicas=torch.distributed.get_world_size(),
+            rank=local_rank,
+            shuffle=True,
+            seed=seed
+        )
+        shuffle_flag = False
     else:
         train_sampler = None
         shuffle_flag = True
 
     train_loader = DataLoader(
-        train_dataset, 
+        train_dataset,
         batch_size=batch_size, 
         shuffle=shuffle_flag, 
         num_workers=num_workers,
         pin_memory=True,
-        persistent_workers=True,
+        persistent_workers=False,
         prefetch_factor=2,
         sampler=train_sampler   # Use sampler if available
     )
@@ -300,7 +308,7 @@ def create_data_loaders(
         shuffle=False, 
         num_workers=num_workers,
         pin_memory=True,
-        persistent_workers=True,
+        persistent_workers=False,
         prefetch_factor=2,
         sampler=val_sampler
     )
@@ -311,7 +319,7 @@ def create_data_loaders(
         shuffle=False, 
         num_workers=max(1, num_workers//2),
         pin_memory=True,
-        persistent_workers=True,
+        persistent_workers=False,
         prefetch_factor=2,
         sampler=test_sampler
     )
