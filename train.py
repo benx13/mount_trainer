@@ -111,6 +111,7 @@ def main(args):
         model_name=args.net_id,
         net_id=args.net_id,
         num_classes=2,
+        rank=args.local_rank,
         resume_training=(args.resume_from is not None)
     )
 
