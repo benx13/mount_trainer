@@ -15,8 +15,10 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 def setup(rank, world_size):
     """Initialize distributed training environment."""
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
+    if "MASTER_ADDR" not in os.environ:
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '12355'
+    
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
 
 def cleanup():
@@ -80,9 +82,21 @@ def train_process(rank, world_size, args):
     )
 
     criterion = LabelSmoothingLoss(smoothing=0.05)
-    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=args.base_lr,  # This will be scaled automatically
+        weight_decay=args.weight_decay,
+        betas=(0.9, 0.999)
+    )
+    
+    # Main scheduler (after warmup)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', patience=5, factor=0.5, verbose=(rank == 0)
+        optimizer,
+        mode='min',
+        patience=5,
+        factor=0.5,
+        verbose=(rank == 0),
+        min_lr=1e-6
     )
     scaler = GradScaler()
 
@@ -103,7 +117,9 @@ def train_process(rank, world_size, args):
         num_classes=2,
         resume_training=args.resume_from is not None,
         rank=rank,
-        world_size=world_size
+        world_size=world_size,
+        warmup_epochs=args.warmup_epochs,
+        base_lr=args.base_lr
     )
 
     cleanup()
@@ -111,16 +127,23 @@ def train_process(rank, world_size, args):
 
 def main(args):
     if torch.cuda.is_available():
-        n_gpus = torch.cuda.device_count()
-        if n_gpus > 1:
-            mp.spawn(
-                train_process,
-                args=(n_gpus, args),
-                nprocs=n_gpus,
-                join=True
-            )
+        # Check if using torchrun/distributed launch
+        if "LOCAL_RANK" in os.environ:
+            rank = int(os.environ["LOCAL_RANK"])
+            world_size = int(os.environ["WORLD_SIZE"])
+            train_process(rank, world_size, args)
         else:
-            train_process(0, 1, args)
+            # Fallback to spawn method
+            n_gpus = torch.cuda.device_count()
+            if n_gpus > 1:
+                mp.spawn(
+                    train_process,
+                    args=(n_gpus, args),
+                    nprocs=n_gpus,
+                    join=True
+                )
+            else:
+                train_process(0, 1, args)
     else:
         print("No GPU available. Running on CPU...")
         train_process(0, 1, args)
@@ -167,6 +190,14 @@ if __name__ == "__main__":
                       help="Directory to save checkpoints")
     parser.add_argument("--resume_from", type=str,
                       help="Path to checkpoint to resume training from")
+
+    # Learning rate arguments
+    parser.add_argument("--base_lr", type=float, default=0.001,
+                      help="Base learning rate for batch size 256")
+    parser.add_argument("--warmup_epochs", type=int, default=5,
+                      help="Number of epochs for learning rate warmup")
+    parser.add_argument("--weight_decay", type=float, default=0.05,
+                      help="Weight decay coefficient")
 
     args = parser.parse_args()
     

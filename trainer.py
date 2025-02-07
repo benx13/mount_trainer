@@ -5,6 +5,7 @@ import os
 import wandb
 from torch.amp import GradScaler, autocast # Import GradScaler and autocast
 import torch.distributed as dist
+import math
 
 def save_checkpoint(state, is_best, output_dir, model_name):
     """Save model checkpoint and optionally log to wandb."""
@@ -75,6 +76,38 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, scheduler=None, scal
     
     return checkpoint.get('epoch', 0), checkpoint.get('best_val_accuracy', 0.0)
 
+def get_scaled_lr(base_lr, batch_size, world_size):
+    """
+    Scale learning rate based on global batch size.
+    Uses the linear scaling rule: lr = base_lr * (global_batch_size / 256)
+    
+    Args:
+        base_lr: Base learning rate for batch size 256
+        batch_size: Batch size per GPU
+        world_size: Number of GPUs
+    """
+    global_batch_size = batch_size * world_size
+    scale_factor = global_batch_size / 256
+    return base_lr * scale_factor
+
+def get_warmup_scheduler(optimizer, warmup_epochs, total_epochs, steps_per_epoch):
+    """
+    Create a learning rate scheduler with linear warmup and cosine decay
+    """
+    def lr_lambda(current_step):
+        warmup_steps = warmup_epochs * steps_per_epoch
+        total_steps = total_epochs * steps_per_epoch
+        
+        if current_step < warmup_steps:
+            # Linear warmup
+            return float(current_step) / float(max(1, warmup_steps))
+        else:
+            # Cosine decay
+            progress = float(current_step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
+    
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
 def train_model(
     model,
     train_loader,
@@ -92,7 +125,9 @@ def train_model(
     num_classes,
     resume_training=False,
     rank=0,
-    world_size=1
+    world_size=1,
+    warmup_epochs=5,  # Add warmup epochs parameter
+    base_lr=0.001     # Add base learning rate parameter
 ):
     """
     Train a model with support for distributed training.
@@ -113,11 +148,34 @@ def train_model(
         resume_training: Whether to resume from latest checkpoint
         rank: Rank of the current process
         world_size: Total number of processes
+        warmup_epochs: Number of warmup epochs
+        base_lr: Base learning rate
     
     Returns:
         float: Best validation accuracy achieved
         float: Test accuracy of the best model
     """
+    # Scale learning rate based on global batch size
+    batch_size = train_loader.batch_size
+    scaled_lr = get_scaled_lr(base_lr, batch_size, world_size)
+    
+    if rank == 0:
+        logger.info(f"Scaled learning rate from {base_lr} to {scaled_lr} "
+                   f"(batch_size={batch_size}, world_size={world_size})")
+    
+    # Adjust optimizer with scaled learning rate
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = scaled_lr
+    
+    # Create warmup scheduler
+    steps_per_epoch = len(train_loader)
+    warmup_scheduler = get_warmup_scheduler(
+        optimizer, 
+        warmup_epochs, 
+        epochs, 
+        steps_per_epoch
+    )
+    
     # Initialize best accuracy and start epoch
     latest_checkpoint = os.path.join(output_dir, f"{model_name}_latest.pth")
     if resume_training and os.path.exists(latest_checkpoint):
@@ -128,7 +186,9 @@ def train_model(
             scheduler=scheduler,
             scaler=scaler
         )
-        print(f"Resuming training from epoch {start_epoch} with best validation accuracy: {best_val_accuracy:.4f}")
+        # Adjust warmup scheduler to resume point
+        for _ in range(start_epoch * steps_per_epoch):
+            warmup_scheduler.step()
     else:
         start_epoch = 0
         best_val_accuracy = 0.0
@@ -228,16 +288,26 @@ def train_model(
                 'learning_rate': optimizer.param_groups[0]['lr']
             })
         
-        # Step the scheduler based on validation loss
-        scheduler.step(val_loss)
-        current_lr = optimizer.param_groups[0]['lr']
-
+        # Step both schedulers
+        warmup_scheduler.step()
+        
+        # Only step the main scheduler after warmup
+        if epoch >= warmup_epochs:
+            scheduler.step(val_loss)
+        
+        # Log learning rate
+        if rank == 0:
+            current_lr = optimizer.param_groups[0]['lr']
+            wandb.log({
+                'learning_rate': current_lr,
+                'epoch': epoch
+            })
+        
         print(f"Epoch [{epoch+1}/{epochs}], "
               f"Train Loss: {train_loss:.4f}, "
               f"Train Acc: {train_accuracy:.4f}, "
               f"Val Loss: {val_loss:.4f}, "
-              f"Val Acc: {val_accuracy:.4f}, "
-              f"LR: {current_lr:.2e}")
+              f"Val Acc: {val_accuracy:.4f}")
 
         # Save checkpoint
         is_best = val_accuracy > best_val_accuracy

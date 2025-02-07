@@ -5,7 +5,7 @@ from albumentations.pytorch import ToTensorV2
 import cv2
 import numpy as np
 import os
-from dataset import AlbumentationsDataset, TransformWrapper
+from dataset import AlbumentationsDataset, TransformWrapper, CachedImageDataset
 from torch.utils.data.distributed import DistributedSampler
 
 import albumentations as A
@@ -176,31 +176,46 @@ def create_data_loaders(
     val_dir=None,
     test_dir=None,
     world_size=1,
-    rank=-1
+    rank=-1,
+    cache_dir=None,
+    persistent_workers=True
 ):
-    """
-    Creates data loaders with support for distributed training.
-    """
-    if not os.path.exists(data_dir):
-        raise ValueError(f"Data directory {data_dir} does not exist")
-    if val_dir and not os.path.exists(val_dir):
-        raise ValueError(f"Validation directory {val_dir} does not exist")
-    if test_dir and not os.path.exists(test_dir):
-        raise ValueError(f"Test directory {test_dir} does not exist")
-
-    # Get augmentation pipelines
-    train_transform = get_augmentation_pipeline(train=True, img_size=input_shape[0])
-    val_transform = get_augmentation_pipeline(train=False, img_size=input_shape[0])
-
-    # Calculate appropriate number of workers if not specified
+    """Optimized data loaders for large-scale training"""
+    
+    # Calculate optimal workers for 8x4090 setup
     if num_workers is None:
-        num_workers = min(8, os.cpu_count() or 1)  # Use at most 8 workers
-
-    # Case 1: Using separate directories for validation and test
+        if world_size > 1:
+            # For distributed training on 8 GPUs
+            num_workers = min(16, max(8, (128 // world_size)))  # 16 workers per GPU
+        else:
+            num_workers = 32  # More workers for single GPU
+    
+    # Calculate optimal batch size per GPU
+    # Assuming 4090 has 24GB memory, adjust batch_size if needed
+    
+    # Create datasets with caching
     if val_dir and test_dir:
-        train_dataset = AlbumentationsDataset(data_dir, transform=train_transform)
-        val_dataset = AlbumentationsDataset(val_dir, transform=val_transform)
-        test_dataset = AlbumentationsDataset(test_dir, transform=val_transform)
+        train_dataset = CachedImageDataset(
+            data_dir, 
+            transform=train_transform, 
+            skip_corrupt=True,
+            num_workers=num_workers,
+            cache_dir=os.path.join(cache_dir or '.cache', 'train')
+        )
+        val_dataset = CachedImageDataset(
+            val_dir, 
+            transform=val_transform, 
+            skip_corrupt=True,
+            num_workers=num_workers,
+            cache_dir=os.path.join(cache_dir or '.cache', 'val')
+        )
+        test_dataset = CachedImageDataset(
+            test_dir, 
+            transform=val_transform, 
+            skip_corrupt=True,
+            num_workers=num_workers,
+            cache_dir=os.path.join(cache_dir or '.cache', 'test')
+        )
         
         print(f"\nUsing separate directories for validation and test sets:")
         print(f"Training: {len(train_dataset)} images from {data_dir}")
@@ -210,7 +225,7 @@ def create_data_loaders(
     # Case 2: Split single directory into train/val/test
     else:
         # Load the full dataset
-        full_dataset = AlbumentationsDataset(data_dir, transform=val_transform)
+        full_dataset = CachedImageDataset(data_dir, transform=val_transform, skip_corrupt=True)
         
         # Calculate split sizes
         total_size = len(full_dataset)
@@ -274,15 +289,18 @@ def create_data_loaders(
         shuffle=False
     ) if world_size > 1 else None
 
-    # Create data loaders with distributed samplers
+    # Create data loaders with optimized settings
     train_loader = DataLoader(
         train_dataset, 
-        batch_size=batch_size, 
+        batch_size=batch_size,
         shuffle=(train_sampler is None),
         sampler=train_sampler,
         num_workers=num_workers,
         pin_memory=True,
-        drop_last=True  # Important for DDP to avoid hanging
+        persistent_workers=persistent_workers,
+        prefetch_factor=2,
+        drop_last=True,
+        generator=torch.Generator().manual_seed(seed)
     )
     
     val_loader = DataLoader(
