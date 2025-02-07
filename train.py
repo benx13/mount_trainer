@@ -112,7 +112,8 @@ def train_process(rank, world_size, args):
         num_classes=2,
         resume_training=args.resume_from is not None,
         rank=rank,
-        world_size=world_size
+        world_size=world_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps
     )
 
     if rank == 0:
@@ -186,16 +187,39 @@ def main(args):
         world_size=world_size
     )
 
+    # Scale learning rate with number of GPUs
+    base_lr = args.learning_rate
+    scaled_lr = base_lr * world_size  # Linear scaling rule
+    
     criterion = LabelSmoothingLoss(smoothing=0.05)
-    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer = optim.AdamW(model.parameters(), lr=scaled_lr, weight_decay=0.0005)
+    
+    # Add warmup to handle the larger effective batch size
+    from torch.optim.lr_scheduler import LinearLR, SequentialLR
+    
+    warmup_epochs = 5
+    warmup_scheduler = LinearLR(
+        optimizer, 
+        start_factor=0.1,
+        end_factor=1.0,
+        total_iters=warmup_epochs
+    )
+    
+    main_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', patience=5, factor=0.5, verbose=True
     )
-    scaler = GradScaler()
+    
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, main_scheduler],
+        milestones=[warmup_epochs]
+    )
 
     # At the start of main()
     torch.backends.cudnn.benchmark = True
     torch.set_float32_matmul_precision('high')  # Enable TF32 for better performance
+
+    scaler = GradScaler()
 
     best_val_accuracy, test_accuracy = train_model(
         model=model,
@@ -214,7 +238,8 @@ def main(args):
         num_classes=2,
         resume_training=args.resume_from is not None,
         rank=rank,
-        world_size=world_size
+        world_size=world_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps
     )
 
     if rank == 0:
@@ -269,6 +294,9 @@ if __name__ == "__main__":
                       help="Directory to save checkpoints")
     parser.add_argument("--resume_from", type=str,
                       help="Path to checkpoint to resume training from")
+
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
+                      help="Number of steps to accumulate gradients before updating weights")
 
     args = parser.parse_args()
     

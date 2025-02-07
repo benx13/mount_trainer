@@ -100,7 +100,8 @@ def train_model(
     num_classes,
     resume_training=False,
     rank=0,
-    world_size=1
+    world_size=1,
+    gradient_accumulation_steps=1
 ):
     """Modified train_model function to support distributed training"""
     # Initialize best accuracy and start epoch
@@ -120,34 +121,34 @@ def train_model(
         best_val_accuracy = 0.0
 
     for epoch in range(start_epoch, epochs):
-        # Set epoch for DistributedSampler
         train_loader.sampler.set_epoch(epoch)
-        
-        model = model.to(memory_format=torch.channels_last)
         model.train()
         
         running_loss = 0.0
         correct_predictions = 0
         total_samples = 0
+        optimizer.zero_grad()
         
         train_loop = tqdm(train_loader, leave=False) if rank == 0 else train_loader
-        for images, labels in train_loop:
+        for step, (images, labels) in enumerate(train_loop):
             images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
-            
-            optimizer.zero_grad()
 
             with autocast('cuda'):
                 outputs = model(images)
                 loss = criterion(outputs, labels)
+                loss = loss / gradient_accumulation_steps  # Scale loss
 
             scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            
+            if (step + 1) % gradient_accumulation_steps == 0:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
 
             # Reduce loss across all GPUs
             reduced_loss = reduce_tensor(loss.detach(), world_size)
-            running_loss += reduced_loss.item()
+            running_loss += reduced_loss.item() * gradient_accumulation_steps  # Scale back for logging
 
             _, predicted = torch.max(outputs.data, 1)
             total_samples += labels.size(0)
