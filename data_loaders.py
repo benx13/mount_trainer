@@ -127,12 +127,13 @@ def create_data_loaders(
 ):
     """Optimized data loaders for large-scale training"""
     
-    # Calculate optimal workers for 8x4090 setup
+    # Calculate optimal workers for dataset initialization
     if num_workers is None:
         if world_size > 1:
-            num_workers = min(16, max(8, (128 // world_size)))  # 16 workers per GPU
+            # For distributed training, use more workers for initial dataset processing
+            num_workers = min(128, max(32, (128 // world_size)))  # Use more cores for dataset processing
         else:
-            num_workers = 32  # More workers for single GPU
+            num_workers = 96  # Use most cores for single GPU
 
     # Get augmentation pipelines
     train_transform = train_augmentation_pipeline(input_shape[0])
@@ -234,13 +235,16 @@ def create_data_loaders(
         shuffle=False
     ) if world_size > 1 else None
 
+    # Calculate loader workers (different from dataset initialization workers)
+    loader_workers = min(16, num_workers // world_size)  # Limit per-GPU workers for data loading
+    
     # Create data loaders with optimized settings
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size,
         shuffle=(train_sampler is None),
         sampler=train_sampler,
-        num_workers=num_workers,
+        num_workers=loader_workers,  # Use fewer workers for data loading
         pin_memory=True,
         persistent_workers=persistent_workers,
         prefetch_factor=2,

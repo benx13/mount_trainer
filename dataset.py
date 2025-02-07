@@ -55,7 +55,13 @@ class CachedImageDataset(Dataset):
         self.lmdb_path = os.path.join(self.cache_dir, 'images.lmdb')
         
         if num_workers is None:
+            # Use more workers for dataset initialization
             num_workers = min(128, os.cpu_count() or 1)
+        else:
+            # If num_workers is specified, use it directly
+            num_workers = min(num_workers, os.cpu_count() or 1)
+        
+        logger.info(f"Initializing dataset with {num_workers} workers")
         
         # Initialize dataset
         self._initialize_dataset(num_workers, skip_corrupt)
