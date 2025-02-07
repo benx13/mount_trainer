@@ -287,9 +287,10 @@ def create_data_loaders(
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True,
-        prefetch_factor=4,
+        prefetch_factor=2,
         sampler=train_sampler,
         drop_last=True,
+        multiprocessing_context='fork'
     )
     
     # For validation and testing, you can either use a DistributedSampler as well (if you want distributed evaluation)
@@ -302,7 +303,7 @@ def create_data_loaders(
         val_sampler = None
         test_sampler = None
 
-    val_workers = max(2, num_workers // 2)
+    val_workers = max(2, num_workers // 4)
     
     val_loader = DataLoader(
         val_dataset, 
@@ -313,7 +314,8 @@ def create_data_loaders(
         persistent_workers=True,
         prefetch_factor=2,
         sampler=val_sampler,
-        drop_last=False
+        drop_last=False,
+        multiprocessing_context='fork'
     )
     
     test_loader = DataLoader(

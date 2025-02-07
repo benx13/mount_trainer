@@ -52,14 +52,19 @@ def main(args):
     
     # Set higher priority for GPU operations
     if torch.cuda.is_available():
+        # Create separate streams for data transfer and computation
+        data_stream = torch.cuda.Stream()
+        compute_stream = torch.cuda.Stream()
         torch.cuda.set_device(args.local_rank)
-        torch.cuda.set_stream(torch.cuda.Stream())
+        
+        # Set default stream
+        torch.cuda.set_stream(compute_stream)
 
-    # Optimize batch size based on GPU count
+    # Adjust batch size more conservatively
     if args.local_rank is not None:
         world_size = dist.get_world_size()
-        args.batch_size = args.batch_size * world_size
-        args.num_workers = min(args.num_workers * world_size, os.cpu_count())
+        args.batch_size = args.batch_size * (world_size // 2)  # More conservative scaling
+        args.num_workers = min(args.num_workers * (world_size // 2), os.cpu_count())
 
     # Build the model
     model, image_size, description = build_model(
