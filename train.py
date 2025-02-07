@@ -9,84 +9,92 @@ import argparse
 from trainer import train_model
 from lebel_smooth import LabelSmoothingLoss
 from torch.amp import GradScaler, autocast
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 
-def main(args):
-    # Initialize wandb
-    wandb.init(
-        project="mcunet-training",
-        config={
-            "net_id": args.net_id,
-            "learning_rate": args.learning_rate,
-            "batch_size": args.batch_size,
-            "epochs": args.epochs,
-            "val_split": args.val_split,
-            "test_split": args.test_split,
-            "seed": args.seed
-        }
-    )
+def setup(rank, world_size):
+    """Initialize distributed training."""
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+def cleanup():
+    """Clean up distributed training."""
+    dist.destroy_process_group()
+
+def train_process(rank, world_size, args):
+    setup(rank, world_size)
     
+    # Initialize wandb only on the main process
+    if rank == 0:
+        wandb.init(
+            project="mcunet-training",
+            config={
+                "net_id": args.net_id,
+                "learning_rate": args.learning_rate,
+                "batch_size": args.batch_size,
+                "epochs": args.epochs,
+                "val_split": args.val_split,
+                "test_split": args.test_split,
+                "seed": args.seed,
+                "num_gpus": world_size
+            }
+        )
+
     # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    wandb.config.update({"device": str(device)})
+    device = torch.device(f"cuda:{rank}")
+    print(f"Running on rank {rank} using device: {device}")
 
-    # Enable cuDNN benchmarking and deterministic mode
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cudnn.deterministic = False
-    
+    if rank == 0:
+        wandb.config.update({"device": str(device)})
+
     # Create model using build_model
     model, image_size, description = build_model(
         net_id=args.net_id,
         pretrained=True,
     )
-    print(f"Loaded model: {args.net_id}")
-    print(f"Image size: {image_size}")
-    print(f"Description: {description}")
     
-    # Use channels_last memory format for better performance on NVIDIA GPUs
+    if rank == 0:
+        print(f"Loaded model: {args.net_id}")
+        print(f"Image size: {image_size}")
+        print(f"Description: {description}")
+    
     model = model.to(device, memory_format=torch.channels_last)
+    model = DDP(model, device_ids=[rank])
 
     if torch.cuda.is_available() and hasattr(torch, 'compile'):
-        model = torch.compile(model)  # PyTorch 2.0+ optimization
+        model = torch.compile(model)
 
-    # Enable gradient checkpointing if model supports it
-    if hasattr(model, 'gradient_checkpointing_enable'):
-        model.gradient_checkpointing_enable()
+    if hasattr(model.module, 'gradient_checkpointing_enable'):
+        model.module.gradient_checkpointing_enable()
 
-    # Optimize batch size and workers based on GPU memory
-    if torch.cuda.is_available():
-        gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
-        #suggested_batch_size = min(args.batch_size, int(gpu_mem * 4))  # Rough estimate
-        #suggested_workers = min(os.cpu_count(), int(gpu_mem * 2))
-        
-        #args.batch_size = 512#suggested_batch_size
-        #args.num_workers = suggested_workers
-        
-        print(f"Optimized batch size: {args.batch_size}")
-        print(f"Optimized num workers: {args.num_workers}")
-
-    # Create data loaders
+    # Adjust batch size per GPU
+    per_gpu_batch_size = args.batch_size // world_size
+    
+    # Create data loaders with DistributedSampler
     train_loader, val_loader, test_loader = create_data_loaders(
         data_dir=args.data_dir,
-        input_shape=(144, 144, 3),  # Model's expected input size
-        batch_size=args.batch_size,
+        input_shape=(144, 144, 3),
+        batch_size=per_gpu_batch_size,
         val_split=args.val_split,
         test_split=args.test_split,
         seed=args.seed,
         val_dir=args.val_dir,
-        test_dir=args.test_dir
+        test_dir=args.test_dir,
+        distributed=True,
+        rank=rank,
+        world_size=world_size
     )
 
-    # Define loss function, optimizer and scheduler
-    #criterion = nn.CrossEntropyLoss()
     criterion = LabelSmoothingLoss(smoothing=0.05)
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', patience=5, factor=0.5, verbose=True
     )
-    scaler = GradScaler('cuda')  # Initialize GradScaler
+    scaler = GradScaler()
 
-    # Train the model using train_model function
     best_val_accuracy, test_accuracy = train_model(
         model=model,
         train_loader=train_loader,
@@ -102,12 +110,29 @@ def main(args):
         model_name=args.net_id,
         net_id=args.net_id,
         num_classes=2,
-        resume_training=args.resume_from is not None
+        resume_training=args.resume_from is not None,
+        rank=rank,
+        world_size=world_size
     )
 
-    print(f"\nTraining completed!")
-    print(f"Best validation accuracy: {best_val_accuracy:.2f}%")
-    print(f"Test accuracy: {test_accuracy:.2f}%")
+    if rank == 0:
+        print(f"\nTraining completed!")
+        print(f"Best validation accuracy: {best_val_accuracy:.2f}%")
+        print(f"Test accuracy: {test_accuracy:.2f}%")
+
+    cleanup()
+
+def main(args):
+    world_size = torch.cuda.device_count()
+    if world_size < 2:
+        raise ValueError("This script requires at least 2 GPUs!")
+    
+    mp.spawn(
+        train_process,
+        args=(world_size, args),
+        nprocs=world_size,
+        join=True
+    )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train MCUNet model on Wake Vision dataset")
