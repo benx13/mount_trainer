@@ -13,12 +13,15 @@ from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 def main(args):
-    # Initialize distributed training if needed
     if args.local_rank is not None:
         torch.cuda.set_device(args.local_rank)
         device = torch.device("cuda", args.local_rank)
         dist.init_process_group(backend="nccl")
     else:
+        print("Not using distributed training")
+        print("Not using distributed training")
+        print("Not using distributed training")
+        print("Not using distributed training")
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Only the main process logs to wandb
