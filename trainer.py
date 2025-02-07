@@ -214,7 +214,7 @@ def train_model(
             optimizer.zero_grad()
             
             # Forward pass with autocast
-            with autocast():
+            with autocast(device_type=str(device).split(':')[0]):  # 'cuda' or 'cpu'
                 outputs = model(images)
                 loss = criterion(outputs, labels)
             
