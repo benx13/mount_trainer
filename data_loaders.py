@@ -325,5 +325,7 @@ def create_data_loaders(
     # For the training dataset, use DistributedSampler if distributed training is enabled
     if local_rank == 0:
         print(f"Train dataset length: {len(train_dataset)}, Sampler length: {len(train_sampler)}")
+    if local_rank == 1:
+        print(f"Train dataset length: {len(train_dataset)}, Sampler length: {len(train_sampler)}")
 
     return train_loader, val_loader, test_loader
