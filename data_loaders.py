@@ -266,9 +266,6 @@ def create_data_loaders(
     print(f"Classes: {sorted(train_classes)}")
     print(f"Process started with local_rank: {local_rank}")
 
-    # For the training dataset, use DistributedSampler if distributed training is enabled
-    if local_rank == 0:
-        print(f"Train dataset length: {len(train_dataset)}, Sampler length: {len(train_sampler)}")
 
     if distributed:
         train_sampler = DistributedSampler(
@@ -325,5 +322,8 @@ def create_data_loaders(
         prefetch_factor=2,
         sampler=test_sampler
     )
+    # For the training dataset, use DistributedSampler if distributed training is enabled
+    if local_rank == 0:
+        print(f"Train dataset length: {len(train_dataset)}, Sampler length: {len(train_sampler)}")
 
     return train_loader, val_loader, test_loader
