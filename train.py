@@ -123,16 +123,103 @@ def train_process(rank, world_size, args):
     cleanup()
 
 def main(args):
-    world_size = torch.cuda.device_count()
-    if world_size < 2:
-        raise ValueError("This script requires at least 2 GPUs!")
+    # Initialize process group
+    dist.init_process_group(backend="nccl")
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
     
-    mp.spawn(
-        train_process,
-        args=(world_size, args),
-        nprocs=world_size,
-        join=True
+    # Set device
+    device = torch.device(f"cuda:{rank}")
+    torch.cuda.set_device(device)
+
+    # Initialize wandb only on the main process
+    if rank == 0:
+        wandb.init(
+            project="mcunet-training",
+            config={
+                "net_id": args.net_id,
+                "learning_rate": args.learning_rate,
+                "batch_size": args.batch_size,
+                "epochs": args.epochs,
+                "val_split": args.val_split,
+                "test_split": args.test_split,
+                "seed": args.seed,
+                "num_gpus": world_size
+            }
+        )
+
+    # Create model using build_model
+    model, image_size, description = build_model(
+        net_id=args.net_id,
+        pretrained=True,
     )
+    
+    if rank == 0:
+        print(f"Loaded model: {args.net_id}")
+        print(f"Image size: {image_size}")
+        print(f"Description: {description}")
+    
+    model = model.to(device, memory_format=torch.channels_last)
+    model = DDP(model, device_ids=[rank])
+
+    if torch.cuda.is_available() and hasattr(torch, 'compile'):
+        model = torch.compile(model)
+
+    if hasattr(model.module, 'gradient_checkpointing_enable'):
+        model.module.gradient_checkpointing_enable()
+
+    # Adjust batch size per GPU
+    per_gpu_batch_size = args.batch_size // world_size
+    
+    # Create data loaders with DistributedSampler
+    train_loader, val_loader, test_loader = create_data_loaders(
+        data_dir=args.data_dir,
+        input_shape=(144, 144, 3),
+        batch_size=per_gpu_batch_size,
+        val_split=args.val_split,
+        test_split=args.test_split,
+        seed=args.seed,
+        val_dir=args.val_dir,
+        test_dir=args.test_dir,
+        distributed=True,
+        rank=rank,
+        world_size=world_size
+    )
+
+    criterion = LabelSmoothingLoss(smoothing=0.05)
+    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', patience=5, factor=0.5, verbose=True
+    )
+    scaler = GradScaler()
+
+    best_val_accuracy, test_accuracy = train_model(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        test_loader=test_loader,
+        criterion=criterion,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        scaler=scaler,
+        device=device,
+        epochs=args.epochs,
+        output_dir=args.checkpoint_dir,
+        model_name=args.net_id,
+        net_id=args.net_id,
+        num_classes=2,
+        resume_training=args.resume_from is not None,
+        rank=rank,
+        world_size=world_size
+    )
+
+    if rank == 0:
+        print(f"\nTraining completed!")
+        print(f"Best validation accuracy: {best_val_accuracy:.2f}%")
+        print(f"Test accuracy: {test_accuracy:.2f}%")
+
+    # Clean up
+    dist.destroy_process_group()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train MCUNet model on Wake Vision dataset")
