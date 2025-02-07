@@ -127,13 +127,15 @@ def create_data_loaders(
 ):
     """Optimized data loaders for large-scale training"""
     
-    # Use all available cores for dataset initialization
+    # Optimize number of workers per GPU
     if num_workers is None:
-        num_workers = min(128, os.cpu_count() or 1)  # Use all cores
+        num_workers = min(16, os.cpu_count() // world_size)  # Workers per GPU
     
-    # Increase prefetch factor and use more workers for data loading
-    loader_workers = min(32, num_workers // world_size)  # Use more workers per GPU
-    prefetch_factor = 4  # Increase prefetch factor
+    # Increase prefetch factor for better GPU utilization
+    prefetch_factor = 8  # Fetch more samples per worker
+    
+    # Pin memory for faster data transfer to GPU
+    pin_memory = True
     
     # Get augmentation pipelines
     train_transform = train_augmentation_pipeline(input_shape[0])
@@ -243,8 +245,8 @@ def create_data_loaders(
         batch_size=batch_size,
         shuffle=(train_sampler is None),
         sampler=train_sampler,
-        num_workers=loader_workers,
-        pin_memory=True,
+        num_workers=num_workers,  # Workers per GPU
+        pin_memory=pin_memory,
         persistent_workers=persistent_workers,
         prefetch_factor=prefetch_factor,
         drop_last=True,
