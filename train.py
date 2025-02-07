@@ -169,7 +169,7 @@ def main(args):
         model.module.gradient_checkpointing_enable()
 
     # Adjust batch size per GPU
-    per_gpu_batch_size = args.batch_size // world_size
+    per_gpu_batch_size = args.batch_size  # Each GPU gets the full batch size
     
     # Create data loaders with DistributedSampler
     train_loader, val_loader, test_loader = create_data_loaders(
@@ -192,6 +192,10 @@ def main(args):
         optimizer, mode='min', patience=5, factor=0.5, verbose=True
     )
     scaler = GradScaler()
+
+    # At the start of main()
+    torch.backends.cudnn.benchmark = True
+    torch.set_float32_matmul_precision('high')  # Enable TF32 for better performance
 
     best_val_accuracy, test_accuracy = train_model(
         model=model,
@@ -250,7 +254,7 @@ if __name__ == "__main__":
     
     # Training arguments
     parser.add_argument("--batch_size", type=int, default=32,
-                      help="Batch size for training")
+                      help="Batch size per GPU for training")
     parser.add_argument("--num_workers", type=int, default=16,
                       help="Number of workers for training")
     parser.add_argument("--epochs", type=int, default=100,

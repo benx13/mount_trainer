@@ -168,7 +168,7 @@ def get_augmentation_pipeline(train=True, img_size=224):
 def create_data_loaders(
     data_dir,
     input_shape,
-    batch_size,
+    batch_size,  # This is now per-GPU batch size
     val_split,
     test_split,
     seed,
@@ -215,11 +215,10 @@ def create_data_loaders(
 
     # Calculate appropriate number of workers if not specified
     if num_workers is None:
-        num_workers = min(8, os.cpu_count() or 1)  # Use at most 8 workers per process
+        num_workers = min(16, os.cpu_count() or 1)  # Increase default workers
     
-    # For distributed training, scale workers per GPU
-    if distributed:
-        num_workers = max(1, num_workers // world_size)
+    # For distributed training, keep full num_workers per GPU
+    # Don't divide by world_size anymore
 
     # Case 1: Using separate directories for validation and test
     if val_dir and test_dir:
@@ -288,23 +287,21 @@ def create_data_loaders(
     # Create data loaders
     train_loader = DataLoader(
         train_dataset,
-        batch_size=batch_size,
+        batch_size=batch_size,  # This is now per-GPU batch size
         shuffle=(train_sampler is None),
         num_workers=num_workers,
         pin_memory=True,
         sampler=train_sampler,
-        persistent_workers=True,  # Keep workers alive between epochs
-        prefetch_factor=2        # Number of batches loaded in advance by each worker
+        persistent_workers=True,
+        prefetch_factor=2
     )
 
-    # Validation and test can use more workers since they don't need distributed sampling
-    val_test_workers = num_workers * 2 if not distributed else num_workers
-    
+    # For val/test, use the same batch size per GPU
     val_loader = DataLoader(
         val_dataset,
-        batch_size=batch_size * 2,  # Can use larger batch size for validation
+        batch_size=batch_size,
         shuffle=False,
-        num_workers=val_test_workers,
+        num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True,
         prefetch_factor=2
@@ -312,9 +309,9 @@ def create_data_loaders(
 
     test_loader = DataLoader(
         test_dataset,
-        batch_size=batch_size * 2,  # Can use larger batch size for testing
+        batch_size=batch_size,
         shuffle=False,
-        num_workers=val_test_workers,
+        num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True,
         prefetch_factor=2
