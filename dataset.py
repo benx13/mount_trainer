@@ -201,38 +201,19 @@ class AlbumentationsDataset(Dataset):
         self.classes = sorted(os.listdir(root_dir))
         self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
         
-        if num_workers is None:
-            num_workers = min(128, os.cpu_count() or 1)  # Use up to 128 cores
-        
-        # Prepare arguments for parallel processing
-        class_dirs = [
-            (os.path.join(root_dir, class_name), self.class_to_idx[class_name])
-            for class_name in self.classes
-            if os.path.isdir(os.path.join(root_dir, class_name))
-        ]
-        
-        # Process class directories in parallel
+        # Collect all valid image paths
         self.samples = []
-        total_skipped = 0
-        total_images = 0
+        for class_name in self.classes:
+            class_dir = os.path.join(root_dir, class_name)
+            if not os.path.isdir(class_dir):
+                continue
+            
+            for filename in os.listdir(class_dir):
+                if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    img_path = os.path.join(class_dir, filename)
+                    self.samples.append((img_path, self.class_to_idx[class_name]))
         
-        logger.info(f"Scanning dataset using {num_workers} workers...")
-        with mp.Pool(processes=num_workers) as pool:
-            results = []
-            for result in tqdm(
-                pool.imap_unordered(process_image_batch, class_dirs),
-                total=len(class_dirs),
-                desc="Loading dataset"
-            ):
-                valid_samples, skipped, total = result
-                self.samples.extend(valid_samples)
-                total_skipped += skipped
-                total_images += total
-        
-        if total_skipped > 0:
-            logger.info(f"Skipped {total_skipped} corrupt/empty images out of {total_images} total images")
-        
-        logger.info(f"Successfully loaded {len(self.samples)} valid images")
+        logger.info(f"Found {len(self.samples)} images across {len(self.classes)} classes")
     
     def __len__(self):
         return len(self.samples)
@@ -240,13 +221,10 @@ class AlbumentationsDataset(Dataset):
     def __getitem__(self, idx):
         img_path, label = self.samples[idx]
         try:
-            # Read image using cv2 with reduced color first for speed
-            image = cv2.imread(img_path, cv2.IMREAD_REDUCED_COLOR_2)
+            # Read image using cv2
+            image = cv2.imread(img_path)
             if image is None:
-                # Try full read if reduced read fails
-                image = cv2.imread(img_path)
-                if image is None:
-                    raise ValueError("Image is empty or corrupt")
+                raise ValueError(f"Failed to load image: {img_path}")
             
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             
