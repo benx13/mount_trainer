@@ -127,6 +127,9 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train MCUNet model on Wake Vision dataset")
     print("sys.argv:", sys.argv)
+    import os
+    print("LOCAL_RANK from env:", os.environ.get("LOCAL_RANK"))
+
     # Wandb arguments
     parser.add_argument("--wandb-project", type=str, default="mcunet-training",
                         help="Weights & Biases project name")
@@ -175,6 +178,14 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     
+    if args.local_rank is None:
+        local_rank_env = os.environ.get("LOCAL_RANK")
+        if local_rank_env is not None:
+            args.local_rank = int(local_rank_env)
+        else:
+            args.local_rank = 0  # default to 0 if nothing is found
+    print(f"Process started with local_rank: {args.local_rank}")
+
     # Validate directory arguments
     if (args.val_dir and not args.test_dir) or (args.test_dir and not args.val_dir):
         parser.error("If providing separate validation/test directories, both --val_dir and --test_dir must be specified")
