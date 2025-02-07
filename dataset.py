@@ -14,36 +14,24 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def process_class_dir(args):
-    """Process all images in a class directory"""
-    class_dir, class_idx = args
+def process_image_batch(args):
+    """Process a batch of images"""
+    image_paths, class_idx = args
     valid_samples = []
     skipped = 0
-    total = 0
     
-    # Process images in chunks for better CPU utilization
-    image_paths = []
-    
-    for filename in os.scandir(class_dir):
-        if filename.name.lower().endswith(('.png', '.jpg', '.jpeg')):
-            image_paths.append(filename.path)
-            
-    total = len(image_paths)
-    
-    # Process images in parallel within each process
-    with mp.Pool(processes=4) as inner_pool:  # Use inner pool for image processing
-        for img_path in image_paths:
-            try:
-                img = cv2.imread(img_path, cv2.IMREAD_REDUCED_COLOR_2)
-                if img is None or img.size == 0:
-                    skipped += 1
-                    continue
-                valid_samples.append((img_path, class_idx))
-            except Exception as e:
+    for img_path in image_paths:
+        try:
+            img = cv2.imread(img_path, cv2.IMREAD_REDUCED_COLOR_2)
+            if img is None or img.size == 0:
                 skipped += 1
                 continue
+            valid_samples.append((img_path, class_idx))
+        except Exception as e:
+            skipped += 1
+            continue
     
-    return valid_samples, skipped, total, os.path.basename(class_dir)
+    return valid_samples, skipped, len(image_paths)
 
 class CachedImageDataset(Dataset):
     """Memory-efficient dataset with LMDB caching for large-scale datasets"""
@@ -93,51 +81,62 @@ class CachedImageDataset(Dataset):
             logger.info(f"Loaded {len(self.samples)} samples from cache")
             return
 
-        # Prepare arguments for parallel processing
-        class_dirs = [
-            (os.path.join(self.root_dir, class_name), self.class_to_idx[class_name])
-            for class_name in self.classes
-            if os.path.isdir(os.path.join(self.root_dir, class_name))
-        ]
+        logger.info(f"Found {len(self.classes)} classes")
         
-        total_classes = len(class_dirs)
-        logger.info(f"Found {total_classes} classes to process")
+        # Collect all images first
+        all_images = []
+        for class_name in self.classes:
+            class_dir = os.path.join(self.root_dir, class_name)
+            if not os.path.isdir(class_dir):
+                continue
+                
+            class_images = [
+                os.path.join(class_dir, fname)
+                for fname in os.listdir(class_dir)
+                if fname.lower().endswith(('.png', '.jpg', '.jpeg'))
+            ]
+            all_images.extend((img_path, self.class_to_idx[class_name]) for img_path in class_images)
         
-        # Process class directories in parallel with larger chunk size
+        total_images = len(all_images)
+        logger.info(f"Found total of {total_images} images")
+        
+        # Split images into batches for parallel processing
+        batch_size = 1000  # Process 1000 images per batch
+        batches = []
+        for i in range(0, len(all_images), batch_size):
+            batch_images = all_images[i:i + batch_size]
+            paths, labels = zip(*batch_images)
+            batches.append((list(paths), labels[0]))  # All images in batch have same label
+        
+        # Process batches in parallel
         self.samples = []
         total_skipped = 0
-        total_images = 0
         processed_images = 0
         
-        # Use larger chunk size for better CPU utilization
-        chunk_size = max(1, total_classes // (num_workers * 2))
-        
-        with tqdm(total=total_classes, desc="Processing classes", position=0) as pbar:
+        with tqdm(total=total_images, desc="Processing images", position=0) as pbar:
             with mp.Pool(processes=num_workers) as pool:
-                for result in pool.imap_unordered(process_class_dir, class_dirs, chunksize=chunk_size):
-                    valid_samples, skipped, total, class_name = result
+                for result in pool.imap_unordered(process_image_batch, batches):
+                    valid_samples, skipped, total = result
                     self.samples.extend(valid_samples)
                     total_skipped += skipped
-                    total_images += total
                     processed_images += (total - skipped)
                     
-                    # Update progress bar with detailed information
-                    pbar.update(1)
+                    # Update progress
+                    pbar.update(total)
                     pbar.set_postfix({
-                        'class': class_name,
-                        'valid': len(valid_samples),
-                        'skipped': skipped,
-                        'total_processed': processed_images
+                        'valid': processed_images,
+                        'skipped': total_skipped,
+                        'total': total_images
                     })
         
         if total_skipped > 0:
             logger.info(f"Skipped {total_skipped} corrupt/empty images out of {total_images} total images")
         
-        # Create LMDB cache with parallel writing
+        # Create LMDB cache
         logger.info("Creating LMDB cache...")
         env = lmdb.open(self.lmdb_path, map_size=1099511627776 * 2)
         
-        # Process images in parallel for LMDB writing
+        # Cache images
         total_samples = len(self.samples)
         with env.begin(write=True) as txn:
             with tqdm(total=total_samples, desc="Caching images", position=0) as pbar:
@@ -221,11 +220,11 @@ class AlbumentationsDataset(Dataset):
         with mp.Pool(processes=num_workers) as pool:
             results = []
             for result in tqdm(
-                pool.imap_unordered(process_class_dir, class_dirs),
+                pool.imap_unordered(process_image_batch, class_dirs),
                 total=len(class_dirs),
                 desc="Loading dataset"
             ):
-                valid_samples, skipped, total, class_name = result
+                valid_samples, skipped, total = result
                 self.samples.extend(valid_samples)
                 total_skipped += skipped
                 total_images += total
