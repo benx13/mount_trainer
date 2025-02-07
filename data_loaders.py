@@ -264,6 +264,8 @@ def create_data_loaders(
         raise ValueError("Classes are not consistent across train, validation, and test sets")
 
     print(f"Classes: {sorted(train_classes)}")
+    print(f"Process started with local_rank: {local_rank}")
+
     # For the training dataset, use DistributedSampler if distributed training is enabled
     if local_rank == 0:
         print(f"Train dataset length: {len(train_dataset)}, Sampler length: {len(train_sampler)}")
