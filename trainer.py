@@ -195,72 +195,65 @@ def train_model(
         if world_size > 1:
             train_loader.sampler.set_epoch(epoch)
         
-        # Training phase
+        # Set train mode
         model.train()
-        running_loss = 0.0
-        correct_predictions = 0
-        total_samples = 0
+        train_loss = 0.0
+        train_correct_predictions = 0
+        train_total_samples = 0
         
-        train_loop = tqdm(train_loader, leave=False) if rank == 0 else train_loader
-        
-        for images, labels in train_loop:
+        # Create progress bar for training
+        if rank == 0:  # Only show progress bar on main process
+            train_iter = tqdm(train_loader, desc=f"Epoch [{epoch+1}/{epochs}]", leave=False)
+        else:
+            train_iter = train_loader
             
+        for images, labels in train_iter:
             images, labels = images.to(device), labels.to(device)
+            
+            # Zero gradients
             optimizer.zero_grad()
-
-            with autocast('cuda'):
+            
+            # Forward pass with autocast
+            with autocast():
                 outputs = model(images)
                 loss = criterion(outputs, labels)
-
+            
+            # Backward pass with gradient scaling
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
-
-            running_loss += loss.item()
+            
+            # Update metrics
+            train_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
-            total_samples += labels.size(0)
-            correct_predictions += (predicted == labels).sum().item()
-
-            train_loop.set_description(f"Epoch [{epoch+1}/{epochs}]")
-            train_loop.set_postfix(
-                train_loss=running_loss / (train_loop.n + 1e-5),
-                train_acc=correct_predictions / total_samples
-            )
-
-        # Synchronize metrics across processes
-        if world_size > 1:
-            train_loss = torch.tensor([running_loss]).to(device)
-            train_correct = torch.tensor([correct_predictions]).to(device)
-            train_total = torch.tensor([total_samples]).to(device)
+            train_total_samples += labels.size(0)
+            train_correct_predictions += (predicted == labels).sum().item()
             
-            dist.all_reduce(train_loss, op=dist.ReduceOp.SUM)
-            dist.all_reduce(train_correct, op=dist.ReduceOp.SUM)
-            dist.all_reduce(train_total, op=dist.ReduceOp.SUM)
-            
-            running_loss = train_loss.item()
-            correct_predictions = train_correct.item()
-            total_samples = train_total.item()
+            # Update progress bar on main process
+            if rank == 0:
+                train_iter.set_postfix({
+                    'loss': train_loss / (train_iter.n + 1e-5),
+                    'acc': train_correct_predictions / train_total_samples
+                })
 
-        train_accuracy = correct_predictions / total_samples
-        train_loss = running_loss / len(train_loader)
-        
-        # Log metrics only from rank 0
-        if rank == 0:
-            wandb.log({
-                'train/loss': train_loss,
-                'train/accuracy': train_accuracy,
-                'train/epoch': epoch + 1
-            })
+        # Calculate epoch metrics
+        train_accuracy = train_correct_predictions / train_total_samples
+        train_loss = train_loss / len(train_loader)
 
         # Validation phase
         model.eval()
         val_loss = 0.0
         val_correct_predictions = 0
         val_total_samples = 0
-        val_loop = tqdm(val_loader, leave=False)
         
+        # Create progress bar for validation
+        if rank == 0:
+            val_iter = tqdm(val_loader, desc=f"Validation", leave=False)
+        else:
+            val_iter = val_loader
+            
         with torch.no_grad():
-            for images, labels in val_loop:
+            for images, labels in val_iter:
                 images, labels = images.to(device), labels.to(device)
                 outputs = model(images)
                 loss = criterion(outputs, labels)
@@ -268,11 +261,13 @@ def train_model(
                 _, predicted = torch.max(outputs.data, 1)
                 val_total_samples += labels.size(0)
                 val_correct_predictions += (predicted == labels).sum().item()
-                val_loop.set_description(f"Epoch [{epoch+1}/{epochs}]")
-                val_loop.set_postfix(
-                    val_loss=val_loss / (val_loop.n + 1e-5),
-                    val_acc=val_correct_predictions / val_total_samples
-                )
+                
+                # Update progress bar on main process
+                if rank == 0:
+                    val_iter.set_postfix({
+                        'loss': val_loss / (val_iter.n + 1e-5),
+                        'acc': val_correct_predictions / val_total_samples
+                    })
 
         val_accuracy = val_correct_predictions / val_total_samples
         val_loss = val_loss / len(val_loader)
