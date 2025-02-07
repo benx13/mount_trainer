@@ -86,7 +86,7 @@ def main(args):
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', patience=5, factor=0.5, verbose=True
     )
-    scaler = GradScaler()  # Initialize GradScaler without extra device args
+    scaler = GradScaler('cuda')  # Initialize GradScaler without extra device args
 
     # Train the model using train_model function
     best_val_accuracy, test_accuracy = train_model(
