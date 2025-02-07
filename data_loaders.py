@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import os
 from dataset import AlbumentationsDataset, TransformWrapper
+from torch.utils.data.distributed import DistributedSampler
 
 import albumentations as A
 import cv2
@@ -166,14 +167,17 @@ def get_augmentation_pipeline(train=True, img_size=224):
 
 def create_data_loaders(
     data_dir,
-    input_shape, 
+    input_shape,
     batch_size,
-    val_split=0.1,
-    test_split=0.1,
-    num_workers=32,
-    seed=42,
+    val_split,
+    test_split,
+    seed,
     val_dir=None,
-    test_dir=None
+    test_dir=None,
+    distributed=False,
+    rank=0,
+    world_size=1,
+    num_workers=None
 ):
     """
     Creates data loaders for training, validation, and testing using data from disk in ImageNet format.
@@ -187,10 +191,13 @@ def create_data_loaders(
         batch_size (int): Batch size for data loaders
         val_split (float): Fraction of data to use for validation when splitting (default: 0.1)
         test_split (float): Fraction of data to use for testing when splitting (default: 0.1)
-        num_workers (int, optional): Number of workers for data loading. If None, uses CPU count
         seed (int): Random seed for reproducibility
         val_dir (str, optional): Directory containing validation dataset. If provided, val_split is ignored
         test_dir (str, optional): Directory containing test dataset. If provided, test_split is ignored
+        distributed (bool): Whether to use DistributedSampler
+        rank (int): Process rank for distributed training
+        world_size (int): Total number of processes for distributed training
+        num_workers (int, optional): Number of workers for data loading. If None, scales based on CPU count
 
     Returns:
         tuple: (train_loader, val_loader, test_loader) - PyTorch DataLoaders for each split
@@ -207,8 +214,12 @@ def create_data_loaders(
     val_transform = get_augmentation_pipeline(train=False, img_size=input_shape[0])
 
     # Calculate appropriate number of workers if not specified
-    # if num_workers is None:
-    #     num_workers = min(8, os.cpu_count() or 1)  # Use at most 8 workers
+    if num_workers is None:
+        num_workers = min(8, os.cpu_count() or 1)  # Use at most 8 workers per process
+    
+    # For distributed training, scale workers per GPU
+    if distributed:
+        num_workers = max(1, num_workers // world_size)
 
     # Case 1: Using separate directories for validation and test
     if val_dir and test_dir:
@@ -265,35 +276,48 @@ def create_data_loaders(
 
     print(f"Classes: {sorted(train_classes)}")
     
+    # Create samplers for distributed training
+    train_sampler = DistributedSampler(
+        train_dataset,
+        num_replicas=world_size,
+        rank=rank,
+        shuffle=True,
+        seed=seed
+    ) if distributed else None
+
     # Create data loaders
     train_loader = DataLoader(
-        train_dataset, 
-        batch_size=batch_size, 
-        shuffle=True, 
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=(train_sampler is None),
         num_workers=num_workers,
         pin_memory=True,
+        sampler=train_sampler,
         persistent_workers=True,  # Keep workers alive between epochs
-        prefetch_factor=2,       # Number of batches loaded in advance by each worker
+        prefetch_factor=2        # Number of batches loaded in advance by each worker
     )
+
+    # Validation and test can use more workers since they don't need distributed sampling
+    val_test_workers = num_workers * 2 if not distributed else num_workers
     
     val_loader = DataLoader(
-        val_dataset, 
+        val_dataset,
         batch_size=batch_size * 2,  # Can use larger batch size for validation
-        shuffle=False, 
-        num_workers=num_workers,
+        shuffle=False,
+        num_workers=val_test_workers,
         pin_memory=True,
         persistent_workers=True,
-        prefetch_factor=2,
+        prefetch_factor=2
     )
-    
+
     test_loader = DataLoader(
-        test_dataset, 
+        test_dataset,
         batch_size=batch_size * 2,  # Can use larger batch size for testing
-        shuffle=False, 
-        num_workers=max(1, num_workers//2),
+        shuffle=False,
+        num_workers=val_test_workers,
         pin_memory=True,
         persistent_workers=True,
-        prefetch_factor=2,
+        prefetch_factor=2
     )
 
     return train_loader, val_loader, test_loader
