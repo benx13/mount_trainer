@@ -116,7 +116,7 @@ def train_model(
             images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
             optimizer.zero_grad()
-            with autocast():
+            with autocast(device_type='cuda'):
                 outputs = model(images)
                 loss = criterion(outputs, labels)
             scaler.scale(loss).backward()
