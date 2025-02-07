@@ -159,9 +159,7 @@ def train_model(
     batch_size = train_loader.batch_size
     scaled_lr = get_scaled_lr(base_lr, batch_size, world_size)
     
-    if rank == 0:
-        logger.info(f"Scaled learning rate from {base_lr} to {scaled_lr} "
-                   f"(batch_size={batch_size}, world_size={world_size})")
+
     
     # Adjust optimizer with scaled learning rate
     for param_group in optimizer.param_groups:
