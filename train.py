@@ -80,7 +80,7 @@ def main(args):
     # Define loss function, optimizer and scheduler
     #criterion = nn.CrossEntropyLoss()
     criterion = LabelSmoothingLoss(smoothing=0.05)
-    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.005)
+    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', patience=5, factor=0.5, verbose=True
     )
