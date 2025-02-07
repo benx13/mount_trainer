@@ -139,8 +139,8 @@ if __name__ == "__main__":
     # Training arguments
     parser.add_argument("--batch_size", type=int, default=32,
                       help="Batch size for training")
-    parser.add_argument("--batch_size", type=int, default=32,
-                      help="Batch size for training")
+    parser.add_argument("--num_workers", type=int, default=16,
+                      help="Number of workers for training")
     parser.add_argument("--epochs", type=int, default=100,
                       help="Number of epochs to train")
     parser.add_argument("--learning_rate", type=float, default=0.001,
