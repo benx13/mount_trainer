@@ -11,6 +11,7 @@ from trainer import train_model
 from lebel_smooth import LabelSmoothingLoss
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
+import sys 
 
 def main(args):
     if args.local_rank is not None:
@@ -125,7 +126,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train MCUNet model on Wake Vision dataset")
-    
+    print("sys.argv:", sys.argv)
     # Wandb arguments
     parser.add_argument("--wandb-project", type=str, default="mcunet-training",
                         help="Weights & Biases project name")
