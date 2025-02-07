@@ -195,25 +195,26 @@ def main(args):
     optimizer = optim.AdamW(model.parameters(), lr=scaled_lr, weight_decay=0.0005)
     
     # Add warmup to handle the larger effective batch size
-    from torch.optim.lr_scheduler import LinearLR, SequentialLR
+    from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR
     
     warmup_epochs = 5
     warmup_scheduler = LinearLR(
         optimizer, 
         start_factor=0.1,
         end_factor=1.0,
-        total_iters=warmup_epochs
+        total_iters=warmup_epochs * len(train_loader)
     )
     
-    main_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', patience=5, factor=0.5, verbose=True
-    )
-    
-    scheduler = SequentialLR(
+    main_scheduler = CosineAnnealingLR(
         optimizer,
-        schedulers=[warmup_scheduler, main_scheduler],
-        milestones=[warmup_epochs]
+        T_max=(args.epochs - warmup_epochs) * len(train_loader),
+        eta_min=scaled_lr * 0.01
     )
+    
+    scheduler = torch.optim.lr_scheduler.ChainedScheduler([
+        warmup_scheduler,
+        main_scheduler
+    ])
 
     # At the start of main()
     torch.backends.cudnn.benchmark = True

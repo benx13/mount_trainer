@@ -212,8 +212,8 @@ def train_model(
                 'learning_rate': optimizer.param_groups[0]['lr']
             })
         
-        # Step the scheduler based on validation loss
-        scheduler.step(val_loss)
+        # Step the scheduler based on iteration instead of validation loss
+        scheduler.step()
         current_lr = optimizer.param_groups[0]['lr']
 
         print(f"Epoch [{epoch+1}/{epochs}], "
