@@ -78,7 +78,8 @@ def train_process(rank, world_size, args):
         val_dir=args.val_dir,
         test_dir=args.test_dir,
         world_size=world_size,
-        rank=rank
+        rank=rank,
+        cache_dir=args.cache_dir
     )
 
     criterion = LabelSmoothingLoss(smoothing=0.05)
@@ -166,6 +167,8 @@ if __name__ == "__main__":
     # Data arguments
     parser.add_argument("--data_dir", type=str, required=True,
                       help="Directory containing the training dataset in ImageNet format (human/no-human subdirs)")
+    parser.add_argument("--cache_dir", type=str, default=".cache",
+                      help="Directory to store dataset cache")
     parser.add_argument("--val_dir", type=str,
                       help="Optional directory containing validation dataset. If provided, val_split is ignored")
     parser.add_argument("--test_dir", type=str,
