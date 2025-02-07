@@ -5,6 +5,9 @@ import os
 import wandb
 from torch.amp import GradScaler, autocast # Import GradScaler and autocast
 import time
+from torch.nn.parallel import DistributedDataParallel
+import torch.distributed as dist
+
 def save_checkpoint(state, is_best, output_dir, model_name):
     """Save model checkpoint and optionally log to wandb."""
     # Save locally
@@ -89,8 +92,8 @@ def train_model(
     model_name,
     net_id,
     num_classes,
-    resume_training=False,
-    rank=0  # Add rank parameter
+    rank=0,
+    resume_training=False
 ):
     """
     Train a model with the given parameters and data loaders.
@@ -133,24 +136,30 @@ def train_model(
 
     model = model.to(memory_format=torch.channels_last)
     
+    # Enable gradient synchronization only when needed
+    if isinstance(model, DistributedDataParallel):
+        model.require_backward_grad_sync = False
+    
     for epoch in range(start_epoch, epochs):
-        # Set epoch for distributed sampler if it exists
         if hasattr(train_loader, "sampler") and hasattr(train_loader.sampler, "set_epoch"):
             train_loader.sampler.set_epoch(epoch)
-            
+        
         # Training phase
         model.train()
-        running_loss = 0.0
-        correct_predictions = 0
+        running_loss = torch.zeros(1, device=device)
+        correct_predictions = torch.zeros(1, device=device)
         total_samples = 0
         
-        # Use tqdm only on rank 0
         train_iter = tqdm(train_loader, leave=False) if rank == 0 else train_loader
-        for images, labels in train_iter:
+        for step, (images, labels) in enumerate(train_iter):
+            # Enable gradient sync only for last few iterations of epoch
+            if isinstance(model, DistributedDataParallel):
+                model.require_backward_grad_sync = (step >= len(train_loader) - 5)
+            
             images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
             
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
 
             with autocast('cuda'):
                 outputs = model(images)
@@ -160,20 +169,26 @@ def train_model(
             scaler.step(optimizer)
             scaler.update()
 
-            running_loss += loss.item()
+            running_loss += loss.detach()
             _, predicted = torch.max(outputs.data, 1)
             total_samples += labels.size(0)
-            correct_predictions += (predicted == labels).sum().item()
+            correct_predictions += (predicted == labels).sum()
 
             if rank == 0:
                 train_iter.set_description(f"Epoch [{epoch+1}/{epochs}]")
                 train_iter.set_postfix(
-                    train_loss=running_loss / (train_iter.n + 1e-5),
-                    train_acc=correct_predictions / total_samples
+                    train_loss=running_loss.item() / (step + 1),
+                    train_acc=correct_predictions.item() / total_samples
                 )
 
-        train_accuracy = correct_predictions / total_samples
-        train_loss = running_loss / len(train_loader)
+        # Synchronize metrics across GPUs if in distributed mode
+        if isinstance(model, DistributedDataParallel):
+            dist.all_reduce(running_loss)
+            dist.all_reduce(correct_predictions)
+            total_samples = total_samples * dist.get_world_size()
+
+        train_accuracy = correct_predictions.item() / total_samples
+        train_loss = running_loss.item() / len(train_loader)
         
         # Log training metrics to wandb only on rank 0
         if rank == 0:

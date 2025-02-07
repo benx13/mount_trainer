@@ -46,8 +46,20 @@ def main(args):
     
     print(f"Using device: {device}")
     
+    # Enable cuDNN benchmarking and deterministic mode
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = False
+    
+    # Set higher priority for GPU operations
+    if torch.cuda.is_available():
+        torch.cuda.set_device(args.local_rank)
+        torch.cuda.set_stream(torch.cuda.Stream())
+
+    # Optimize batch size based on GPU count
+    if args.local_rank is not None:
+        world_size = dist.get_world_size()
+        args.batch_size = args.batch_size * world_size
+        args.num_workers = min(args.num_workers * world_size, os.cpu_count())
 
     # Build the model
     model, image_size, description = build_model(
@@ -68,10 +80,6 @@ def main(args):
     # Wrap model with DistributedDataParallel if in distributed mode
     if args.local_rank is not None:
         model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
-
-    # (Optional) Adjust batch size and workers based on GPU memory...
-    print(f"Optimized batch size: {args.batch_size}")
-    print(f"Optimized num workers: {args.num_workers}")
 
     # Create data loaders with an extra flag for distributed training
     train_loader, val_loader, test_loader = create_data_loaders(

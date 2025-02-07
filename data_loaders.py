@@ -287,8 +287,9 @@ def create_data_loaders(
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True,
-        prefetch_factor=2,
-        sampler=train_sampler   # Use sampler if available
+        prefetch_factor=4,
+        sampler=train_sampler,
+        drop_last=True,
     )
     
     # For validation and testing, you can either use a DistributedSampler as well (if you want distributed evaluation)
@@ -301,26 +302,30 @@ def create_data_loaders(
         val_sampler = None
         test_sampler = None
 
+    val_workers = max(2, num_workers // 2)
+    
     val_loader = DataLoader(
         val_dataset, 
         batch_size=batch_size * 2,
         shuffle=False, 
-        num_workers=num_workers,
+        num_workers=val_workers,
         pin_memory=True,
         persistent_workers=True,
         prefetch_factor=2,
-        sampler=val_sampler
+        sampler=val_sampler,
+        drop_last=False
     )
     
     test_loader = DataLoader(
         test_dataset, 
         batch_size=batch_size * 2,
         shuffle=False, 
-        num_workers=max(1, num_workers//2),
+        num_workers=val_workers,
         pin_memory=True,
         persistent_workers=True,
         prefetch_factor=2,
-        sampler=test_sampler
+        sampler=test_sampler,
+        drop_last=False
     )
     # For the training dataset, use DistributedSampler if distributed training is enabled
     if local_rank == 0:

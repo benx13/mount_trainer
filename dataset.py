@@ -2,6 +2,8 @@ import os
 import cv2
 import torch
 from torch.utils.data import Dataset
+from PIL import Image
+import numpy as np
 
 class AlbumentationsDataset(Dataset):
     """Custom dataset that uses Albumentations for augmentation"""
@@ -30,9 +32,14 @@ class AlbumentationsDataset(Dataset):
     
     def __getitem__(self, idx):
         img_path, label = self.samples[idx]
-        # Use IMREAD_COLOR flag for faster reading
-        image = cv2.imread(img_path, cv2.IMREAD_COLOR)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # Use IMREAD_COLOR flag for faster reading and disable auto-orientation
+        image = cv2.imread(img_path, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
+        if image is None:
+            # Fallback to PIL if OpenCV fails
+            image = Image.open(img_path).convert('RGB')
+            image = np.array(image)
+        else:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         
         if self.transform:
             transformed = self.transform(image=image)
