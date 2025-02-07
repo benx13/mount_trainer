@@ -3,38 +3,49 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import wandb
+import argparse
+import torch.distributed as dist
 from data_loaders import create_data_loaders
 from mcunet.model_zoo import build_model
-import argparse
 from trainer import train_model
 from lebel_smooth import LabelSmoothingLoss
 from torch.amp import GradScaler, autocast
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 def main(args):
-    # Initialize wandb
-    wandb.init(
-        project="mcunet-training",
-        config={
-            "net_id": args.net_id,
-            "learning_rate": args.learning_rate,
-            "batch_size": args.batch_size,
-            "epochs": args.epochs,
-            "val_split": args.val_split,
-            "test_split": args.test_split,
-            "seed": args.seed
-        }
-    )
+    # Initialize distributed training if needed
+    if args.local_rank is not None:
+        torch.cuda.set_device(args.local_rank)
+        device = torch.device("cuda", args.local_rank)
+        dist.init_process_group(backend="nccl")
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Only the main process logs to wandb
+    if (not hasattr(args, 'local_rank')) or (args.local_rank == 0):
+        wandb.init(
+            project="mcunet-training",
+            config={
+                "net_id": args.net_id,
+                "learning_rate": args.learning_rate,
+                "batch_size": args.batch_size,
+                "epochs": args.epochs,
+                "val_split": args.val_split,
+                "test_split": args.test_split,
+                "seed": args.seed
+            }
+        )
+        wandb.config.update({"device": str(device)})
+    else:
+        # In non-main processes you can choose to disable wandb logging or use a dummy run.
+        wandb.init(mode="disabled")
+    
     print(f"Using device: {device}")
-    wandb.config.update({"device": str(device)})
-
-    # Enable cuDNN benchmarking and deterministic mode
+    
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = False
-    
-    # Create model using build_model
+
+    # Build the model
     model, image_size, description = build_model(
         net_id=args.net_id,
         pretrained=True,
@@ -43,29 +54,22 @@ def main(args):
     print(f"Image size: {image_size}")
     print(f"Description: {description}")
     
-    # Use channels_last memory format for better performance on NVIDIA GPUs
+    # Move model to device and set channels_last format
     model = model.to(device, memory_format=torch.channels_last)
-
     if torch.cuda.is_available() and hasattr(torch, 'compile'):
         model = torch.compile(model)  # PyTorch 2.0+ optimization
-
-    # Enable gradient checkpointing if model supports it
     if hasattr(model, 'gradient_checkpointing_enable'):
         model.gradient_checkpointing_enable()
 
-    # Optimize batch size and workers based on GPU memory
-    if torch.cuda.is_available():
-        gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
-        #suggested_batch_size = min(args.batch_size, int(gpu_mem * 4))  # Rough estimate
-        #suggested_workers = min(os.cpu_count(), int(gpu_mem * 2))
-        
-        #args.batch_size = 512#suggested_batch_size
-        #args.num_workers = suggested_workers
-        
-        print(f"Optimized batch size: {args.batch_size}")
-        print(f"Optimized num workers: {args.num_workers}")
+    # Wrap model with DistributedDataParallel if in distributed mode
+    if args.local_rank is not None:
+        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
 
-    # Create data loaders
+    # (Optional) Adjust batch size and workers based on GPU memory...
+    print(f"Optimized batch size: {args.batch_size}")
+    print(f"Optimized num workers: {args.num_workers}")
+
+    # Create data loaders with an extra flag for distributed training
     train_loader, val_loader, test_loader = create_data_loaders(
         data_dir=args.data_dir,
         input_shape=(144, 144, 3),  # Model's expected input size
@@ -74,19 +78,20 @@ def main(args):
         test_split=args.test_split,
         seed=args.seed,
         val_dir=args.val_dir,
-        test_dir=args.test_dir
+        test_dir=args.test_dir,
+        distributed=(args.local_rank is not None),   # Pass distributed flag
+        local_rank=args.local_rank                     # Pass local_rank for sampler seeding if needed
     )
 
-    # Define loss function, optimizer and scheduler
-    #criterion = nn.CrossEntropyLoss()
+    # Define loss function, optimizer, scheduler, and GradScaler
     criterion = LabelSmoothingLoss(smoothing=0.05)
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', patience=5, factor=0.5, verbose=True
     )
-    scaler = GradScaler('cuda')  # Initialize GradScaler
+    scaler = GradScaler('cuda')
 
-    # Train the model using train_model function
+    # Train the model
     best_val_accuracy, test_accuracy = train_model(
         model=model,
         train_loader=train_loader,
@@ -102,12 +107,18 @@ def main(args):
         model_name=args.net_id,
         net_id=args.net_id,
         num_classes=2,
-        resume_training=args.resume_from is not None
+        resume_training=(args.resume_from is not None)
     )
 
-    print(f"\nTraining completed!")
-    print(f"Best validation accuracy: {best_val_accuracy:.2f}%")
-    print(f"Test accuracy: {test_accuracy:.2f}%")
+    # Only rank 0 prints the final results
+    if (not hasattr(args, 'local_rank')) or (args.local_rank == 0):
+        print(f"\nTraining completed!")
+        print(f"Best validation accuracy: {best_val_accuracy:.2f}%")
+        print(f"Test accuracy: {test_accuracy:.2f}%")
+
+    # Cleanup distributed process group
+    if args.local_rank is not None:
+        dist.destroy_process_group()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train MCUNet model on Wake Vision dataset")
@@ -153,6 +164,10 @@ if __name__ == "__main__":
                       help="Directory to save checkpoints")
     parser.add_argument("--resume_from", type=str,
                       help="Path to checkpoint to resume training from")
+    
+    # Distributed training argument
+    parser.add_argument("--local_rank", type=int, default=None,
+                      help="Local rank for distributed training")
 
     args = parser.parse_args()
     

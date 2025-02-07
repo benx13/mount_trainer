@@ -129,6 +129,10 @@ def train_model(
         best_val_accuracy = 0.0
 
     for epoch in range(start_epoch, epochs):
+        # Set epoch for distributed sampler if it exists
+        if hasattr(train_loader, "sampler") and hasattr(train_loader.sampler, "set_epoch"):
+            train_loader.sampler.set_epoch(epoch)
+            
         # Switch to channels_last memory format for better performance
         model = model.to(memory_format=torch.channels_last)
         
