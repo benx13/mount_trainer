@@ -4,7 +4,7 @@ from tqdm import tqdm
 import os
 import wandb
 from torch.amp import GradScaler, autocast # Import GradScaler and autocast
-
+import time
 def save_checkpoint(state, is_best, output_dir, model_name):
     """Save model checkpoint and optionally log to wandb."""
     # Save locally
@@ -144,19 +144,28 @@ def train_model(
         
         train_loop = tqdm(train_loader, leave=False)
         for images, labels in train_loop:
+            t0 = time.time()
             # Move to GPU and convert to channels_last
             images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
+            t1 = time.time()
             
             optimizer.zero_grad()
-
             with autocast('cuda'):
                 outputs = model(images)
                 loss = criterion(outputs, labels)
+            t2 = time.time()
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
+            t3 = time.time()
+
+            # Optionally log per-batch times (or accumulate and print averages every N batches)
+            data_loading_time = t1 - t0
+            forward_time = t2 - t1
+            backward_time = t3 - t2
+            print(f"Batch times (s): Data: {data_loading_time:.3f}, Forward: {forward_time:.3f}, Backward: {backward_time:.3f}")
 
             running_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)

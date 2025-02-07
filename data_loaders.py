@@ -286,7 +286,7 @@ def create_data_loaders(
         shuffle=shuffle_flag, 
         num_workers=num_workers,
         pin_memory=True,
-        persistent_workers=False,
+        persistent_workers=True,
         prefetch_factor=2,
         sampler=train_sampler   # Use sampler if available
     )
@@ -307,7 +307,7 @@ def create_data_loaders(
         shuffle=False, 
         num_workers=num_workers,
         pin_memory=True,
-        persistent_workers=False,
+        persistent_workers=True,
         prefetch_factor=2,
         sampler=val_sampler
     )
@@ -318,7 +318,7 @@ def create_data_loaders(
         shuffle=False, 
         num_workers=max(1, num_workers//2),
         pin_memory=True,
-        persistent_workers=False,
+        persistent_workers=True,
         prefetch_factor=2,
         sampler=test_sampler
     )
