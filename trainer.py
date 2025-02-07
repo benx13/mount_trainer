@@ -6,7 +6,7 @@ import wandb
 from torch.amp import GradScaler, autocast # Import GradScaler and autocast
 import torch.distributed as dist
 
-def save_checkpoint(state, is_best, output_dir, model_name):
+def save_checkpoint(state, is_best, output_dir, model_name, rank=0):
     """Save model checkpoint and optionally log to wandb."""
     # Save locally
     os.makedirs(output_dir, exist_ok=True)
@@ -20,8 +20,9 @@ def save_checkpoint(state, is_best, output_dir, model_name):
         best_path = os.path.join(output_dir, f"{model_name}_best.pth")
         torch.save(state, best_path)
         
-        # Log best model to wandb
-        wandb.save(best_path)
+        # Log best model to wandb only on rank 0
+        if rank == 0:
+            wandb.save(best_path)
         
     return latest_path if not is_best else best_path
     """
@@ -201,7 +202,7 @@ def train_model(
         val_accuracy = val_correct_predictions / val_total_samples
         val_loss = val_loss / len(val_loader)
 
-        # Log validation metrics to wandb
+        # Log validation metrics to wandb only on rank 0
         if rank == 0:
             wandb.log({
                 'val/loss': val_loss,
@@ -225,7 +226,7 @@ def train_model(
         is_best = val_accuracy > best_val_accuracy
         best_val_accuracy = max(val_accuracy, best_val_accuracy)
         
-        # Log best metrics to wandb
+        # Log best metrics to wandb only on rank 0
         if is_best and rank == 0:
             wandb.run.summary['best_val_accuracy'] = best_val_accuracy
         
@@ -242,7 +243,7 @@ def train_model(
             'val_loss': val_loss,
             'train_loss': train_loss
         }
-        save_checkpoint(checkpoint, is_best, output_dir, model_name)
+        save_checkpoint(checkpoint, is_best, output_dir, model_name, rank)
 
     print(f"\nBest validation accuracy achieved: {best_val_accuracy:.4f}")
     best_model_path = os.path.join(output_dir, f"{model_name}_best.pth")
@@ -270,7 +271,7 @@ def train_model(
 
     test_accuracy = test_correct / total
     
-    # Log final test metrics to wandb
+    # Log final test metrics to wandb only on rank 0
     if rank == 0:
         wandb.run.summary.update({
             'test/accuracy': test_accuracy,
@@ -278,10 +279,8 @@ def train_model(
             'test/total': total,
             'test/wrong': total - test_correct
         })
-    
-    print(f"\nTest accuracy of the best model: {test_accuracy:.4f}\n")
-
-    # Finish the wandb run
-    wandb.finish()
+        
+        # Finish the wandb run only on rank 0
+        wandb.finish()
 
     return best_val_accuracy, test_accuracy
