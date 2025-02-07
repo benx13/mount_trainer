@@ -8,7 +8,11 @@ from mcunet.model_zoo import build_model
 import argparse
 from trainer import train_model
 from lebel_smooth import LabelSmoothingLoss
-from torch.amp import GradScaler, autocast
+# Removed unused GradScaler import
+#from torch.amp import GradScaler, autocast  <-- Removed
+
+# NEW: Import Accelerator from Hugging Face Accelerate
+from accelerate import Accelerator
 
 def main(args):
     # Initialize wandb
@@ -25,12 +29,12 @@ def main(args):
         }
     )
     
-    # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    wandb.config.update({"device": str(device)})
+    # Initialize Hugging Face Accelerator instead of manually choosing the device
+    accelerator = Accelerator()
+    print(f"Using device: {accelerator.device}")
+    wandb.config.update({"device": str(accelerator.device)})
 
-    # Enable cuDNN benchmarking and deterministic mode
+    # Set cuDNN options (retain as needed)
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = False
     
@@ -44,24 +48,18 @@ def main(args):
     print(f"Description: {description}")
     
     # Use channels_last memory format for better performance on NVIDIA GPUs
-    model = model.to(device, memory_format=torch.channels_last)
+    model = model.to(memory_format=torch.channels_last)
 
     if torch.cuda.is_available() and hasattr(torch, 'compile'):
-        model = torch.compile(model)  # PyTorch 2.0+ optimization
+        model = torch.compile(model)
 
     # Enable gradient checkpointing if model supports it
     if hasattr(model, 'gradient_checkpointing_enable'):
         model.gradient_checkpointing_enable()
 
-    # Optimize batch size and workers based on GPU memory
+    # (Optional) Print out optimized batch size/num_workers info
     if torch.cuda.is_available():
         gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
-        #suggested_batch_size = min(args.batch_size, int(gpu_mem * 4))  # Rough estimate
-        #suggested_workers = min(os.cpu_count(), int(gpu_mem * 2))
-        
-        #args.batch_size = 512#suggested_batch_size
-        #args.num_workers = suggested_workers
-        
         print(f"Optimized batch size: {args.batch_size}")
         print(f"Optimized num workers: {args.num_workers}")
 
@@ -78,16 +76,22 @@ def main(args):
     )
 
     # Define loss function, optimizer and scheduler
-    #criterion = nn.CrossEntropyLoss()
     criterion = LabelSmoothingLoss(smoothing=0.05)
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', patience=5, factor=0.5, verbose=True
     )
-    scaler = GradScaler('cuda')  # Initialize GradScaler
+    # Removed manual GradScaler instantiation
 
-    # Train the model using train_model function
+    # Prepare everything with accelerator so that model, optimizer, data loaders, and scheduler are moved to the correct device
+    model, optimizer, train_loader, val_loader, test_loader, scheduler = accelerator.prepare(
+        model, optimizer, train_loader, val_loader, test_loader, scheduler
+    )
+    
+    # Train the model using train_model function. Note that we removed the "scaler" and "device" parameters,
+    # and now pass the accelerator instance to the trainer.
     best_val_accuracy, test_accuracy = train_model(
+        accelerator=accelerator,
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
@@ -95,8 +99,6 @@ def main(args):
         criterion=criterion,
         optimizer=optimizer,
         scheduler=scheduler,
-        scaler=scaler,
-        device=device,
         epochs=args.epochs,
         output_dir=args.checkpoint_dir,
         model_name=args.net_id,

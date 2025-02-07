@@ -3,6 +3,8 @@ import cv2
 import torch
 from torch.utils.data import Dataset
 
+# This dataset file works as-is with Hugging Face Accelerate.
+
 class AlbumentationsDataset(Dataset):
     """Custom dataset that uses Albumentations for augmentation"""
     def __init__(self, root_dir, transform=None):

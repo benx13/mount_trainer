@@ -3,60 +3,19 @@ import torch.nn as nn
 from tqdm import tqdm
 import os
 import wandb
-from torch.amp import GradScaler, autocast # Import GradScaler and autocast
 
 def save_checkpoint(state, is_best, output_dir, model_name):
     """Save model checkpoint and optionally log to wandb."""
-    # Save locally
     os.makedirs(output_dir, exist_ok=True)
-    
-    # Save latest checkpoint
     latest_path = os.path.join(output_dir, f"{model_name}_latest.pth")
     torch.save(state, latest_path)
-    
-    # If this is the best model, save a copy
     if is_best:
         best_path = os.path.join(output_dir, f"{model_name}_best.pth")
         torch.save(state, best_path)
-        
-        # Log best model to wandb
         wandb.save(best_path)
-        
     return latest_path if not is_best else best_path
-    """
-    Save model checkpoint.
-    
-    Args:
-        state (dict): State dictionary containing model state and metadata
-        is_best (bool): Whether this is the best model so far
-        output_dir (str): Directory to save checkpoints
-        model_name (str): Base name for the checkpoint files
-    """
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Save latest checkpoint
-    latest_path = os.path.join(output_dir, f"{model_name}_latest.pth")
-    torch.save(state, latest_path)
-    
-    # If this is the best model, save a copy
-    if is_best:
-        best_path = os.path.join(output_dir, f"{model_name}_best.pth")
-        torch.save(state, best_path)
 
-def load_checkpoint(checkpoint_path, model, optimizer=None, scheduler=None, scaler=None):
-    """
-    Load model checkpoint.
-    
-    Args:
-        checkpoint_path (str): Path to checkpoint file
-        model: PyTorch model to load weights into
-        optimizer: Optional optimizer to load state
-        scheduler: Optional scheduler to load state
-        scaler: Optional GradScaler to load state
-    
-    Returns:
-        tuple: (start_epoch, best_val_accuracy)
-    """
+def load_checkpoint(checkpoint_path, model, optimizer=None, scheduler=None):
     if not os.path.exists(checkpoint_path):
         return 0, 0.0
         
@@ -69,12 +28,10 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, scheduler=None, scal
     if scheduler is not None and 'scheduler_state_dict' in checkpoint:
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         
-    if scaler is not None and 'scaler_state_dict' in checkpoint:
-        scaler.load_state_dict(checkpoint['scaler_state_dict'])
-    
     return checkpoint.get('epoch', 0), checkpoint.get('best_val_accuracy', 0.0)
 
 def train_model(
+    accelerator,
     model,
     train_loader,
     val_loader,
@@ -82,8 +39,6 @@ def train_model(
     criterion,
     optimizer,
     scheduler,
-    scaler,
-    device,
     epochs,
     output_dir,
     model_name,
@@ -91,47 +46,21 @@ def train_model(
     num_classes,
     resume_training=False
 ):
-    """
-    Train a model with the given parameters and data loaders.
-    
-    Args:
-        model: The PyTorch model to train
-        train_loader: DataLoader for training data
-        val_loader: DataLoader for validation data
-        test_loader: DataLoader for test data
-        criterion: Loss function
-        optimizer: Optimizer
-        device: Device to train on (cuda/cpu)
-        epochs: Number of epochs to train
-        output_dir: Directory to save checkpoints
-        model_name: Name of the model for saving checkpoints
-        net_id: ID of the network architecture
-        num_classes: Number of output classes
-        resume_training: Whether to resume from latest checkpoint
-    
-    Returns:
-        float: Best validation accuracy achieved
-        float: Test accuracy of the best model
-    """
-    # Initialize best accuracy and start epoch
+    # Resume from checkpoint if requested
     latest_checkpoint = os.path.join(output_dir, f"{model_name}_latest.pth")
     if resume_training and os.path.exists(latest_checkpoint):
         start_epoch, best_val_accuracy = load_checkpoint(
             latest_checkpoint,
             model,
             optimizer=optimizer,
-            scheduler=scheduler,
-            scaler=scaler
+            scheduler=scheduler
         )
         print(f"Resuming training from epoch {start_epoch} with best validation accuracy: {best_val_accuracy:.4f}")
     else:
         start_epoch = 0
         best_val_accuracy = 0.0
-    model = model.to(memory_format=torch.channels_last)
+
     for epoch in range(start_epoch, epochs):
-        # Switch to channels_last memory format for better performance
-        
-        # Training phase
         model.train()
         running_loss = 0.0
         correct_predictions = 0
@@ -139,19 +68,15 @@ def train_model(
         
         train_loop = tqdm(train_loader, leave=False)
         for images, labels in train_loop:
-            # Move to GPU and convert to channels_last
-            images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
-            labels = labels.to(device, non_blocking=True)
-            
             optimizer.zero_grad()
 
-            with autocast('cuda'):
+            # Use accelerator's autocast context manager for mixed precision
+            with accelerator.autocast():
                 outputs = model(images)
                 loss = criterion(outputs, labels)
 
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            accelerator.backward(loss)
+            optimizer.step()
 
             running_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
@@ -167,14 +92,12 @@ def train_model(
         train_accuracy = correct_predictions / total_samples
         train_loss = running_loss / len(train_loader)
         
-        # Log training metrics to wandb
         wandb.log({
             'train/loss': train_loss,
             'train/accuracy': train_accuracy,
             'train/epoch': epoch + 1
         })
 
-        # Validation phase
         model.eval()
         val_loss = 0.0
         val_correct_predictions = 0
@@ -183,7 +106,6 @@ def train_model(
         
         with torch.no_grad():
             for images, labels in val_loop:
-                images, labels = images.to(device), labels.to(device)
                 outputs = model(images)
                 loss = criterion(outputs, labels)
                 val_loss += loss.item()
@@ -199,7 +121,6 @@ def train_model(
         val_accuracy = val_correct_predictions / val_total_samples
         val_loss = val_loss / len(val_loader)
 
-        # Log validation metrics to wandb
         wandb.log({
             'val/loss': val_loss,
             'val/accuracy': val_accuracy,
@@ -207,7 +128,6 @@ def train_model(
             'learning_rate': optimizer.param_groups[0]['lr']
         })
         
-        # Step the scheduler based on validation loss
         scheduler.step(val_loss)
         current_lr = optimizer.param_groups[0]['lr']
 
@@ -218,21 +138,18 @@ def train_model(
               f"Val Acc: {val_accuracy:.4f}, "
               f"LR: {current_lr:.2e}")
 
-        # Save checkpoint
         is_best = val_accuracy > best_val_accuracy
         best_val_accuracy = max(val_accuracy, best_val_accuracy)
         
-        # Log best metrics to wandb
         if is_best:
             wandb.run.summary['best_val_accuracy'] = best_val_accuracy
         
-        # Prepare checkpoint
+        # When saving, unwrap the model from the accelerator wrapper
         checkpoint = {
-            'epoch': epoch + 1,  # Save next epoch to resume from
-            'model_state_dict': model.state_dict(),
+            'epoch': epoch + 1,
+            'model_state_dict': accelerator.unwrap_model(model).state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'scheduler_state_dict': scheduler.state_dict(),
-            'scaler_state_dict': scaler.state_dict(),
             'best_val_accuracy': best_val_accuracy,
             'val_accuracy': val_accuracy,
             'train_accuracy': train_accuracy,
@@ -245,12 +162,12 @@ def train_model(
     best_model_path = os.path.join(output_dir, f"{model_name}_best.pth")
     print(f"Best model saved to: {best_model_path}")
 
-    # Testing phase - use the best model for testing
+    # Testing phase - load the best model and prepare it with accelerator
     from mcunet.model_zoo import build_model
     best_model = build_model(net_id=net_id, pretrained=False)[0]
     checkpoint = torch.load(best_model_path)
     best_model.load_state_dict(checkpoint['model_state_dict'])
-    best_model.to(device)
+    best_model = accelerator.prepare(best_model)
     best_model.eval()
 
     test_correct = 0
@@ -259,7 +176,6 @@ def train_model(
     
     with torch.no_grad():
         for images, labels in test_loop:
-            images, labels = images.to(device), labels.to(device)
             outputs = best_model(images)
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
@@ -267,7 +183,6 @@ def train_model(
 
     test_accuracy = test_correct / total
     
-    # Log final test metrics to wandb
     wandb.run.summary.update({
         'test/accuracy': test_accuracy,
         'test/correct': test_correct,
@@ -276,8 +191,6 @@ def train_model(
     })
     
     print(f"\nTest accuracy of the best model: {test_accuracy:.4f}\n")
-
-    # Finish the wandb run
     wandb.finish()
 
     return best_val_accuracy, test_accuracy
