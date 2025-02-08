@@ -75,6 +75,15 @@ def main(args):
     print(f"Image size: {image_size}")
     print(f"Description: {description}")
     
+    # Load weights from checkpoint if specified
+    if args.load_from:
+        if os.path.exists(args.load_from):
+            print(f"Loading model weights from checkpoint: {args.load_from}")
+            checkpoint = torch.load(args.load_from, map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            print(f"Warning: Checkpoint file not found: {args.load_from}")
+
     # Move model to device and set channels_last format
     model = model.to(device, memory_format=torch.channels_last)
     if torch.cuda.is_available() and hasattr(torch, 'compile'):
@@ -125,7 +134,8 @@ def main(args):
         net_id=args.net_id,
         num_classes=2,
         rank=args.local_rank,
-        resume_training=(args.resume_from is not None)
+        resume_training=(args.resume_from is not None),
+        load_from_checkpoint=(args.load_from is not None)
     )
 
     # Only rank 0 prints the final results
@@ -185,6 +195,8 @@ if __name__ == "__main__":
                       help="Directory to save checkpoints")
     parser.add_argument("--resume_from", type=str,
                       help="Path to checkpoint to resume training from")
+    parser.add_argument("--load_from", type=str,
+                      help="Path to checkpoint to load model weights from (starts fresh training)")
     
     # Distributed training argument
     parser.add_argument("--local_rank", type=int, default=None,

@@ -93,7 +93,8 @@ def train_model(
     net_id,
     num_classes,
     rank=0,
-    resume_training=False
+    resume_training=False,
+    load_from_checkpoint=False
 ):
     """
     Train a model with the given parameters and data loaders.
@@ -111,7 +112,8 @@ def train_model(
         model_name: Name of the model for saving checkpoints
         net_id: ID of the network architecture
         num_classes: Number of output classes
-        resume_training: Whether to resume from latest checkpoint
+        resume_training: Whether to resume from latest checkpoint with same training state
+        load_from_checkpoint: Whether model was loaded from checkpoint (but starting fresh training)
         rank: Process rank in distributed training (default: 0)
     
     Returns:
@@ -131,8 +133,11 @@ def train_model(
         if rank == 0:
             print(f"Resuming training from epoch {start_epoch} with best validation accuracy: {best_val_accuracy:.4f}")
     else:
+        # When loading from checkpoint but starting fresh, or starting completely new
         start_epoch = 0
         best_val_accuracy = 0.0
+        if load_from_checkpoint and rank == 0:
+            print("Starting fresh training with loaded model weights")
 
     model = model.to(memory_format=torch.channels_last)
     
