@@ -75,14 +75,7 @@ def main(args):
     print(f"Image size: {image_size}")
     print(f"Description: {description}")
     
-    # Load weights from checkpoint if specified
-    if args.load_from:
-        if os.path.exists(args.load_from):
-            print(f"Loading model weights from checkpoint: {args.load_from}")
-            checkpoint = torch.load(args.load_from, map_location=device)
-            model.load_state_dict(checkpoint['model_state_dict'])
-        else:
-            print(f"Warning: Checkpoint file not found: {args.load_from}")
+
 
     # Move model to device and set channels_last format
     model = model.to(device, memory_format=torch.channels_last)
@@ -95,6 +88,15 @@ def main(args):
     if args.local_rank is not None:
         model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
 
+
+    # Load weights from checkpoint if specified
+    if args.load_from:
+        if os.path.exists(args.load_from):
+            print(f"Loading model weights from checkpoint: {args.load_from}")
+            checkpoint = torch.load(args.load_from)
+            model.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            print(f"Warning: Checkpoint file not found: {args.load_from}")
     # Create data loaders with an extra flag for distributed training
     train_loader, val_loader, test_loader = create_data_loaders(
         data_dir=args.data_dir,
