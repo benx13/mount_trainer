@@ -97,6 +97,23 @@ def main(args):
             model.load_state_dict(checkpoint['model_state_dict'])
         else:
             print(f"Warning: Checkpoint file not found: {args.load_from}")
+
+    print(args.resume_from)
+    print(args.resume_from)
+    print(args.resume_from)
+    print(args.resume_from)
+    print(args.resume_from)
+    print(args.resume_from)
+    print(args.resume_from)
+    print('--------------------------------')
+    print('--------------------------------')
+    print('--------------------------------')
+    print('--------------------------------')
+    print('--------------------------------')
+    print('--------------------------------')
+    print('--------------------------------')
+    print('--------------------------------')
+    print('--------------------------------')
     # Create data loaders with an extra flag for distributed training
     train_loader, val_loader, test_loader = create_data_loaders(
         data_dir=args.data_dir,
