@@ -18,13 +18,13 @@ class SCELoss(nn.Module):
         self.register_buffer('eps', torch.tensor(1e-7))
         self.register_buffer('one_hot_eps', torch.tensor(1e-4))
 
-    @torch.cuda.amp.autocast()  # Enable AMP for the loss computation
+    @torch.cuda.amp.autocast('cuda', enabled=True)  # Enable AMP for the loss computation
     def forward(self, pred, labels):
         # CCE
         ce = self.cross_entropy(pred, labels)
 
         # RCE - use more efficient operations
-        with torch.cuda.amp.autocast(enabled=False):  # Use fp32 for stability
+        with torch.cuda.amp.autocast('cuda',enabled=False):  # Use fp32 for stability
             pred_softmax = F.softmax(pred.float(), dim=1).clamp(min=self.eps)
             # One-hot with smoothing in one operation
             label_one_hot = F.one_hot(labels, self.num_classes).float()
