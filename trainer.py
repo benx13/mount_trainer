@@ -236,13 +236,14 @@ def train_model(
         val_loss = 0.0
         val_correct_predictions = 0
         val_total_samples = 0
-        
-        # Use tqdm only on rank 0
-        val_iter = tqdm(val_loader, leave=False) if rank == 0 else val_loader
+        val_loop = tqdm(val_loader, leave=False)
         
         with torch.no_grad():
-            for images, labels in val_iter:
-                images, labels = images.to(device), labels.to(device)
+            for images, labels in val_loop:
+                # Move to GPU with channels_last and non_blocking
+                images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
+                
                 outputs = model(images)
                 loss = criterion(outputs, labels)
                 val_loss += loss.item()
@@ -324,7 +325,10 @@ def train_model(
         
         with torch.no_grad():
             for images, labels in test_loop:
-                images, labels = images.to(device), labels.to(device)
+                # Move to GPU with channels_last and non_blocking
+                images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
+                
                 outputs = best_model(images)
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)

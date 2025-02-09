@@ -9,6 +9,7 @@ from data_loaders import create_data_loaders
 from mcunet.model_zoo import build_model
 from trainer import train_model
 from lebel_smooth import LabelSmoothingLoss
+from losses import SCELoss
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 import sys 
@@ -28,7 +29,7 @@ def main(args):
     # Only the main process logs to wandb
     if (not hasattr(args, 'local_rank')) or (args.local_rank == 0):
         wandb.init(
-            project="mcunet-training",
+            project=args.wandb_project,
             config={
                 "net_id": args.net_id,
                 "learning_rate": args.learning_rate,
@@ -36,7 +37,11 @@ def main(args):
                 "epochs": args.epochs,
                 "val_split": args.val_split,
                 "test_split": args.test_split,
-                "seed": args.seed
+                "seed": args.seed,
+                "label_smoothing": args.label_smoothing,
+                "loss_type": "SCE" if args.use_sce_loss else "LabelSmoothing",
+                "sce_alpha": args.sce_alpha if args.use_sce_loss else None,
+                "sce_beta": args.sce_beta if args.use_sce_loss else None,
             }
         )
         wandb.config.update({"device": str(device)})
@@ -129,7 +134,15 @@ def main(args):
     )
 
     # Define loss function, optimizer, scheduler, and GradScaler
-    criterion = LabelSmoothingLoss(smoothing=0.05)
+    if args.use_sce_loss:
+        criterion = SCELoss(alpha=args.sce_alpha, beta=args.sce_beta, 
+                          num_classes=2, smoothing=args.label_smoothing).to(device)
+        print("Using SCE Loss with alpha={}, beta={}, smoothing={}".format(
+            args.sce_alpha, args.sce_beta, args.label_smoothing))
+    else:
+        criterion = LabelSmoothingLoss(smoothing=args.label_smoothing).to(device)
+        print("Using Label Smoothing CE Loss with smoothing={}".format(args.label_smoothing))
+
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', patience=5, factor=0.5, verbose=True
@@ -220,6 +233,18 @@ if __name__ == "__main__":
     # Distributed training argument
     parser.add_argument("--local_rank", type=int, default=None,
                       help="Local rank for distributed training")
+
+    # Add label smoothing argument
+    parser.add_argument("--label_smoothing", type=float, default=0.05,
+                      help="Label smoothing factor (default: 0.05)")
+
+    # Add SCE loss arguments
+    parser.add_argument("--use_sce_loss", action='store_true',
+                      help="Use Symmetric Cross Entropy Loss instead of standard CE")
+    parser.add_argument("--sce_alpha", type=float, default=1.0,
+                      help="Alpha parameter for SCE loss (default: 1.0)")
+    parser.add_argument("--sce_beta", type=float, default=1.0,
+                      help="Beta parameter for SCE loss (default: 1.0)")
 
     args = parser.parse_args()
     
