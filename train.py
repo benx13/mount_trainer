@@ -69,18 +69,14 @@ def main(args):
     # Create data loaders
     train_loader, val_loader, test_loader = create_data_loaders(
         data_dir=args.data_dir,
-        input_shape=(144, 144, 3),  # Model's expected input size
+        input_shape=(64, 64, 3),  # Model's expected input size
         batch_size=args.batch_size,
         val_split=args.val_split,
         test_split=args.test_split,
         seed=args.seed,
         val_dir=args.val_dir,
         test_dir=args.test_dir,
-        # Add these parameters for faster data loading
-        num_workers=args.num_workers,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=2
+        num_workers=args.num_workers  # Only pass num_workers, remove the other params
     )
 
     # Define loss function, optimizer and scheduler
