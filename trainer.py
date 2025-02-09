@@ -76,6 +76,7 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, scheduler=None, scal
 
 def train_model(
     model,
+    batch_size,
     train_loader,
     val_loader,
     test_loader,
@@ -132,7 +133,7 @@ def train_model(
     model = model.to(memory_format=torch.channels_last)
     
     # Pre-allocate tensors for predictions
-    pred_labels = torch.empty(args.batch_size, dtype=torch.long, device=device)
+    pred_labels = torch.empty(batch_size, dtype=torch.long, device=device)
     
     # Enable torch.backends.cuda.matmul.allow_tf32 = True  # Add at the start
     torch.backends.cuda.matmul.allow_tf32 = True

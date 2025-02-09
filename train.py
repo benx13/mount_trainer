@@ -101,6 +101,7 @@ def main(args):
     # Train the model using train_model function
     best_val_accuracy, test_accuracy = train_model(
         model=model,
+        batch_size=args.batch_size,
         train_loader=train_loader,
         val_loader=val_loader,
         test_loader=test_loader,
