@@ -150,7 +150,6 @@ def train_model(
     print(latest_checkpoint)
     print(latest_checkpoint)
     print(latest_checkpoint)
-    exit()
     if resume_training and os.path.exists(latest_checkpoint):
         start_epoch, best_val_accuracy = load_checkpoint(
             latest_checkpoint,
