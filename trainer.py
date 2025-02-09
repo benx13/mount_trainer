@@ -185,9 +185,9 @@ def train_model(
         
         train_iter = tqdm(train_loader, leave=False) if rank == 0 else train_loader
         for step, (images, labels) in enumerate(train_iter):
-            # Enable gradient sync every N steps instead of just at the end
+            # Enable gradient sync every step
             if isinstance(model, DistributedDataParallel):
-                model.require_backward_grad_sync = (step % 8 == 0)  # Sync every 8 steps
+                model.require_backward_grad_sync = True
             
             images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
