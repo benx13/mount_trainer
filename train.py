@@ -8,6 +8,7 @@ from mcunet.model_zoo import build_model
 import argparse
 from trainer import train_model
 from lebel_smooth import LabelSmoothingLoss
+from losses import SCELoss
 from torch.amp import GradScaler, autocast
 
 def main(args):
@@ -22,6 +23,9 @@ def main(args):
             "val_split": args.val_split,
             "test_split": args.test_split,
             "seed": args.seed,
+            "loss_type": "SCE" if args.use_sce_loss else "LabelSmoothing",
+            "sce_alpha": args.sce_alpha if args.use_sce_loss else None,
+            "sce_beta": args.sce_beta if args.use_sce_loss else None,
             "label_smoothing": args.label_smoothing
         }
     )
@@ -80,7 +84,14 @@ def main(args):
     )
 
     # Define loss function, optimizer and scheduler
-    criterion = LabelSmoothingLoss(smoothing=args.label_smoothing)
+    if args.use_sce_loss:
+        criterion = SCELoss(alpha=args.sce_alpha, beta=args.sce_beta, 
+                          num_classes=2, smoothing=args.label_smoothing)
+        print("Using SCE Loss with alpha={}, beta={}, smoothing={}".format(
+            args.sce_alpha, args.sce_beta, args.label_smoothing))
+    else:
+        criterion = LabelSmoothingLoss(smoothing=args.label_smoothing)
+        print("Using Label Smoothing CE Loss with smoothing={}".format(args.label_smoothing))
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', patience=5, factor=0.5, verbose=True
@@ -158,6 +169,14 @@ if __name__ == "__main__":
     # Add label smoothing argument
     parser.add_argument("--label_smoothing", type=float, default=0.05,
                       help="Label smoothing factor (default: 0.05)")
+
+    # Add SCE loss arguments
+    parser.add_argument("--use_sce_loss", action='store_true',
+                      help="Use Symmetric Cross Entropy Loss instead of standard CE")
+    parser.add_argument("--sce_alpha", type=float, default=1.0,
+                      help="Alpha parameter for SCE loss (default: 1.0)")
+    parser.add_argument("--sce_beta", type=float, default=1.0,
+                      help="Beta parameter for SCE loss (default: 1.0)")
 
     args = parser.parse_args()
     
