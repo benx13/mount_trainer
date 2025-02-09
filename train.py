@@ -80,11 +80,7 @@ def main(args):
         seed=args.seed,
         val_dir=args.val_dir,
         test_dir=args.test_dir,
-        num_workers=args.num_workers,
-        prefetch_factor=2,
-        persistent_workers=True,
-        pin_memory=True,
-        drop_last=True  # Add this for more efficient batching
+        num_workers=args.num_workers  # Keep only the parameters that create_data_loaders accepts
     )
 
     # Define loss function, optimizer and scheduler
