@@ -169,7 +169,7 @@ def train_model(
                 pass
 
             # Forward pass
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):  # Changed from torch.cuda.amp.autocast()
                 outputs = model(current_images)
                 loss = criterion(outputs, current_labels)
 
