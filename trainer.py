@@ -127,16 +127,21 @@ def train_model(
     else:
         start_epoch = 0
         best_val_accuracy = 0.0
+
+    # Move these operations outside the epoch loop since they only need to be done once
     model = model.to(memory_format=torch.channels_last)
+    
     for epoch in range(start_epoch, epochs):
-        # Switch to channels_last memory format for better performance
-        
         # Training phase
         model.train()
         running_loss = 0.0
         correct_predictions = 0
         total_samples = 0
         
+        # Use torch.cuda.synchronize() to ensure accurate timing
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            
         train_loop = tqdm(train_loader, leave=False)
         for images, labels in train_loop:
             # Move to GPU and convert to channels_last
@@ -218,28 +223,30 @@ def train_model(
               f"Val Acc: {val_accuracy:.4f}, "
               f"LR: {current_lr:.2e}")
 
-        # Save checkpoint
+        # Reduce frequency of checkpoint saving
         is_best = val_accuracy > best_val_accuracy
         best_val_accuracy = max(val_accuracy, best_val_accuracy)
         
-        # Log best metrics to wandb
-        if is_best:
-            wandb.run.summary['best_val_accuracy'] = best_val_accuracy
-        
-        # Prepare checkpoint
-        checkpoint = {
-            'epoch': epoch + 1,  # Save next epoch to resume from
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict(),
-            'scaler_state_dict': scaler.state_dict(),
-            'best_val_accuracy': best_val_accuracy,
-            'val_accuracy': val_accuracy,
-            'train_accuracy': train_accuracy,
-            'val_loss': val_loss,
-            'train_loss': train_loss
-        }
-        save_checkpoint(checkpoint, is_best, output_dir, model_name)
+        # Only save checkpoint if it's the best model or every N epochs
+        should_save = is_best or (epoch + 1) % 5 == 0  # Save every 5 epochs
+        if should_save:
+            checkpoint = {
+                'epoch': epoch + 1,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'scaler_state_dict': scaler.state_dict(),
+                'best_val_accuracy': best_val_accuracy,
+                'val_accuracy': val_accuracy,
+                'train_accuracy': train_accuracy,
+                'val_loss': val_loss,
+                'train_loss': train_loss
+            }
+            save_checkpoint(checkpoint, is_best, output_dir, model_name)
+
+        # Ensure CUDA operations are complete before moving to next epoch
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
     print(f"\nBest validation accuracy achieved: {best_val_accuracy:.4f}")
     best_model_path = os.path.join(output_dir, f"{model_name}_best.pth")

@@ -74,7 +74,12 @@ def main(args):
         test_split=args.test_split,
         seed=args.seed,
         val_dir=args.val_dir,
-        test_dir=args.test_dir
+        test_dir=args.test_dir,
+        # Add these parameters for faster data loading
+        num_workers=args.num_workers,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2
     )
 
     # Define loss function, optimizer and scheduler
