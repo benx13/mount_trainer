@@ -18,7 +18,7 @@ class SCELoss(nn.Module):
         self.register_buffer('eps', torch.tensor(1e-7))
         self.register_buffer('one_hot_eps', torch.tensor(1e-4))
 
-    @torch.cuda.amp.autocast('cuda', enabled=True)  # Enable AMP for the loss computation
+    @torch.cuda.amp.autocast('cuda')  # Enable AMP for the loss computation
     def forward(self, pred, labels):
         # CCE
         ce = self.cross_entropy(pred, labels)
