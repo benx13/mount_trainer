@@ -13,7 +13,7 @@ from torch.amp import GradScaler, autocast
 def main(args):
     # Initialize wandb
     wandb.init(
-        project="mcunet-training",
+        project=args.wandb_project,
         config={
             "net_id": args.net_id,
             "learning_rate": args.learning_rate,
