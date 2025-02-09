@@ -53,7 +53,10 @@ NET_INFO = {
         'net_name': 'mcunet-320kb-1mb_vww',
         'description': 'MCUNet model that fits 320KB SRAM and 1MB Flash (VWW)'
     },
-
+    'mcunet-tiny': {
+        'net_name': 'mcunet_tiny',
+        'description': 'MCUNet model that fits 320KB SRAM and 1MB Flash (VWW)'
+    },
     ##### detection demo model ######
     # NOTE: we have tf-lite only for this model
     'person-det': {
@@ -65,13 +68,15 @@ NET_INFO = {
 net_id_list = list(NET_INFO.keys())
 
 url_base = "https://hanlab18.mit.edu/projects/tinyml/mcunet/release/"
-
+local_url = "mcunet/"
 
 def build_model(net_id, pretrained=True):
     assert net_id in NET_INFO, 'Invalid net_id! Select one from {})'.format(list(NET_INFO.keys()))
-    net_info = NET_INFO[net_id]
-
-    net_config_url = url_base + net_info['net_name'] + ".json"
+    if net_id == 'mcunet-tiny':
+        net_config_url = local_url + net_info['net_name'] + ".json"
+    else:
+        net_info = NET_INFO[net_id]
+        net_config_url = url_base + net_info['net_name'] + ".json"
     sd_url = url_base + net_info['net_name'] + ".pth"
 
     net_config = json.load(open(download_url(net_config_url)))
