@@ -188,7 +188,10 @@ def train_model(
         
         with torch.no_grad():
             for images, labels in val_loop:
-                images, labels = images.to(device), labels.to(device)
+                # Move to GPU with channels_last and non_blocking
+                images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
+                
                 outputs = model(images)
                 loss = criterion(outputs, labels)
                 val_loss += loss.item()
@@ -266,7 +269,10 @@ def train_model(
     
     with torch.no_grad():
         for images, labels in test_loop:
-            images, labels = images.to(device), labels.to(device)
+            # Move to GPU with channels_last and non_blocking
+            images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+            
             outputs = best_model(images)
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)

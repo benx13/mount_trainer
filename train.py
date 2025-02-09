@@ -86,11 +86,11 @@ def main(args):
     # Define loss function, optimizer and scheduler
     if args.use_sce_loss:
         criterion = SCELoss(alpha=args.sce_alpha, beta=args.sce_beta, 
-                          num_classes=2, smoothing=args.label_smoothing)
+                          num_classes=2, smoothing=args.label_smoothing).to(device)
         print("Using SCE Loss with alpha={}, beta={}, smoothing={}".format(
             args.sce_alpha, args.sce_beta, args.label_smoothing))
     else:
-        criterion = LabelSmoothingLoss(smoothing=args.label_smoothing)
+        criterion = LabelSmoothingLoss(smoothing=args.label_smoothing).to(device)
         print("Using Label Smoothing CE Loss with smoothing={}".format(args.label_smoothing))
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
