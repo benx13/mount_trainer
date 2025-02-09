@@ -134,6 +134,7 @@ def train_model(
     
     # Pre-allocate tensors for predictions
     pred_labels = torch.empty(batch_size, dtype=torch.long, device=device)
+    max_vals = torch.empty(batch_size, dtype=torch.float, device=device)
     
     # Enable torch.backends.cuda.matmul.allow_tf32 = True  # Add at the start
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -180,7 +181,7 @@ def train_model(
 
             # Compute accuracy (more efficient)
             with torch.no_grad():
-                torch.max(outputs.data, 1, out=(_, pred_labels))
+                torch.max(outputs.data, 1, out=(max_vals, pred_labels))
                 correct_predictions += (pred_labels == current_labels).sum().item()
                 total_samples += current_labels.size(0)
 
