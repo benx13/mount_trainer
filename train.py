@@ -21,7 +21,8 @@ def main(args):
             "epochs": args.epochs,
             "val_split": args.val_split,
             "test_split": args.test_split,
-            "seed": args.seed
+            "seed": args.seed,
+            "label_smoothing": args.label_smoothing
         }
     )
     
@@ -37,7 +38,7 @@ def main(args):
     # Create model using build_model
     model, image_size, description = build_model(
         net_id=args.net_id,
-        pretrained=True,
+        pretrained=False,
     )
     print(f"Loaded model: {args.net_id}")
     print(f"Image size: {image_size}")
@@ -83,8 +84,7 @@ def main(args):
     )
 
     # Define loss function, optimizer and scheduler
-    #criterion = nn.CrossEntropyLoss()
-    criterion = LabelSmoothingLoss(smoothing=0.05)
+    criterion = LabelSmoothingLoss(smoothing=args.label_smoothing)
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', patience=5, factor=0.5, verbose=True
@@ -158,6 +158,10 @@ if __name__ == "__main__":
                       help="Directory to save checkpoints")
     parser.add_argument("--resume_from", type=str,
                       help="Path to checkpoint to resume training from")
+
+    # Add label smoothing argument
+    parser.add_argument("--label_smoothing", type=float, default=0.05,
+                      help="Label smoothing factor (default: 0.05)")
 
     args = parser.parse_args()
     
