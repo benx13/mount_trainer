@@ -73,7 +73,7 @@ def main(args):
     # Create data loaders with optimized settings
     train_loader, val_loader, test_loader = create_data_loaders(
         data_dir=args.data_dir,
-        input_shape=(64, 64, 3),
+        input_shape=(32, 32, 3),
         batch_size=args.batch_size,
         val_split=args.val_split,
         test_split=args.test_split,
