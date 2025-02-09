@@ -132,9 +132,9 @@ def train_model(
     # Move these operations outside the epoch loop since they only need to be done once
     model = model.to(memory_format=torch.channels_last)
     
-    # Pre-allocate tensors for predictions
+    # Pre-allocate tensors for predictions - change dtype to match model output
     pred_labels = torch.empty(batch_size, dtype=torch.long, device=device)
-    max_vals = torch.empty(batch_size, dtype=torch.float, device=device)
+    max_vals = torch.empty(batch_size, dtype=torch.half, device=device)  # Change to half precision
     
     # Enable torch.backends.cuda.matmul.allow_tf32 = True  # Add at the start
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -180,7 +180,7 @@ def train_model(
             optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
 
             # Compute accuracy (more efficient)
-            with torch.no_grad():
+            with torch.no_grad(), torch.amp.autocast('cuda'):  # Add autocast here too
                 torch.max(outputs.data, 1, out=(max_vals, pred_labels))
                 correct_predictions += (pred_labels == current_labels).sum().item()
                 total_samples += current_labels.size(0)
