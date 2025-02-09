@@ -131,7 +131,7 @@ def main(args):
         scaler=scaler,
         device=device,
         epochs=args.epochs,
-        output_dir=args.checkpoint_dir,
+        output_dir=args.resume_from if args.resume_from is not None else args.checkpoint_dir,
         model_name=args.net_id,
         net_id=args.net_id,
         num_classes=2,

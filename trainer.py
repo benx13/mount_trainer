@@ -121,7 +121,15 @@ def train_model(
         float: Test accuracy of the best model
     """
     # Initialize best accuracy and start epoch
+    print(output_dir)
+    print(output_dir)
+    print(output_dir)
+    print(output_dir)
+    print(output_dir)
     latest_checkpoint = os.path.join(output_dir, f"{model_name}_latest.pth")
+    print(latest_checkpoint)
+    print(latest_checkpoint)
+    print(latest_checkpoint)
     if resume_training and os.path.exists(latest_checkpoint):
         start_epoch, best_val_accuracy = load_checkpoint(
             latest_checkpoint,
