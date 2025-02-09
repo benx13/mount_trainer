@@ -131,6 +131,13 @@ def train_model(
     # Move these operations outside the epoch loop since they only need to be done once
     model = model.to(memory_format=torch.channels_last)
     
+    # Pre-allocate tensors for predictions
+    pred_labels = torch.empty(args.batch_size, dtype=torch.long, device=device)
+    
+    # Enable torch.backends.cuda.matmul.allow_tf32 = True  # Add at the start
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    
     for epoch in range(start_epoch, epochs):
         # Training phase
         model.train()
@@ -138,34 +145,49 @@ def train_model(
         correct_predictions = 0
         total_samples = 0
         
-        # Use torch.cuda.synchronize() to ensure accurate timing
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-            
-        train_loop = tqdm(train_loader, leave=False)
-        for images, labels in train_loop:
-            # Move to GPU and convert to channels_last
-            images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
-            labels = labels.to(device, non_blocking=True)
-            
-            optimizer.zero_grad()
+        # Prefetch next batch
+        train_iter = iter(train_loader)
+        try:
+            next_images, next_labels = next(train_iter)
+            next_images = next_images.to(device, memory_format=torch.channels_last, non_blocking=True)
+            next_labels = next_labels.to(device, non_blocking=True)
+        except StopIteration:
+            pass
 
-            with autocast('cuda'):
-                outputs = model(images)
-                loss = criterion(outputs, labels)
+        train_loop = tqdm(range(len(train_loader)), leave=False)
+        for i in train_loop:
+            current_images, current_labels = next_images, next_labels
+            
+            # Prefetch next batch
+            try:
+                next_images, next_labels = next(train_iter)
+                next_images = next_images.to(device, memory_format=torch.channels_last, non_blocking=True)
+                next_labels = next_labels.to(device, non_blocking=True)
+            except StopIteration:
+                pass
 
+            # Forward pass
+            with torch.cuda.amp.autocast():
+                outputs = model(current_images)
+                loss = criterion(outputs, current_labels)
+
+            # Backward and optimize
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
+            optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
+
+            # Compute accuracy (more efficient)
+            with torch.no_grad():
+                torch.max(outputs.data, 1, out=(_, pred_labels))
+                correct_predictions += (pred_labels == current_labels).sum().item()
+                total_samples += current_labels.size(0)
 
             running_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
-            total_samples += labels.size(0)
-            correct_predictions += (predicted == labels).sum().item()
-
+            
             train_loop.set_description(f"Epoch [{epoch+1}/{epochs}]")
             train_loop.set_postfix(
-                train_loss=running_loss / (train_loop.n + 1e-5),
+                train_loss=running_loss / (i + 1),
                 train_acc=correct_predictions / total_samples
             )
 
