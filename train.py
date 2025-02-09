@@ -26,7 +26,8 @@ def main(args):
             "loss_type": "SCE" if args.use_sce_loss else "LabelSmoothing",
             "sce_alpha": args.sce_alpha if args.use_sce_loss else None,
             "sce_beta": args.sce_beta if args.use_sce_loss else None,
-            "label_smoothing": args.label_smoothing
+            "label_smoothing": args.label_smoothing,
+            "input_size": args.input_size  # Add input size to wandb config
         }
     )
     
@@ -73,14 +74,14 @@ def main(args):
     # Create data loaders with optimized settings
     train_loader, val_loader, test_loader = create_data_loaders(
         data_dir=args.data_dir,
-        input_shape=(32, 32, 3),
+        input_shape=(args.input_size, args.input_size, 3),  # Use input_size parameter
         batch_size=args.batch_size,
         val_split=args.val_split,
         test_split=args.test_split,
         seed=args.seed,
         val_dir=args.val_dir,
         test_dir=args.test_dir,
-        num_workers=args.num_workers  # Keep only the parameters that create_data_loaders accepts
+        num_workers=args.num_workers
     )
 
     # Define loss function, optimizer and scheduler
@@ -178,6 +179,10 @@ if __name__ == "__main__":
                       help="Alpha parameter for SCE loss (default: 1.0)")
     parser.add_argument("--sce_beta", type=float, default=1.0,
                       help="Beta parameter for SCE loss (default: 1.0)")
+
+    # Add input size argument
+    parser.add_argument("--input_size", type=int, default=32,
+                      help="Input image size (assumes square input, default: 32)")
 
     args = parser.parse_args()
     

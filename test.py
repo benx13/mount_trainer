@@ -7,3 +7,7 @@ model, image_size, description = build_model(net_id="mcunet-tiny", pretrained=Fa
 print(image_size, description)
 
 print(model)
+
+# Calculate and print number of parameters
+total_params = sum(p.numel() for p in model.parameters())
+print(f"\nTotal number of parameters: {total_params:,}")
