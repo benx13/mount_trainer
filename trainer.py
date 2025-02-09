@@ -219,7 +219,6 @@ def train_model(
             dist.all_reduce(running_loss)
             dist.all_reduce(correct_predictions)
             total_samples = total_samples * dist.get_world_size()
-
         train_accuracy = correct_predictions.item() / total_samples
         train_loss = running_loss.item() / len(train_loader)
         
@@ -236,10 +235,10 @@ def train_model(
         val_loss = 0.0
         val_correct_predictions = 0
         val_total_samples = 0
-        val_loop = tqdm(val_loader, leave=False)
+        val_iter = tqdm(val_loader, leave=False) if rank == 0 else val_loader
         
         with torch.no_grad():
-            for images, labels in val_loop:
+            for images, labels in val_iter:
                 # Move to GPU with channels_last and non_blocking
                 images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
                 labels = labels.to(device, non_blocking=True)
