@@ -15,6 +15,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import sys 
 
 def main(args):
+
     if args.local_rank is not None:
         torch.cuda.set_device(args.local_rank)
         device = torch.device("cuda", args.local_rank)
@@ -74,7 +75,7 @@ def main(args):
     # Build the model
     model, image_size, description = build_model(
         net_id=args.net_id,
-        pretrained=True,
+        pretrained=False,
     )
     print(f"Loaded model: {args.net_id}")
     print(f"Image size: {image_size}")
@@ -92,7 +93,6 @@ def main(args):
     # Wrap model with DistributedDataParallel if in distributed mode
     if args.local_rank is not None:
         model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
-
 
     # Load weights from checkpoint if specified
     if args.load_from:
@@ -122,18 +122,18 @@ def main(args):
     # Create data loaders with an extra flag for distributed training
     train_loader, val_loader, test_loader = create_data_loaders(
         data_dir=args.data_dir,
-        input_shape=(144, 144, 3),  # Model's expected input size
+        input_shape=(args.input_size, args.input_size, 3),  # Use input_size parameter
         batch_size=args.batch_size,
         val_split=args.val_split,
         test_split=args.test_split,
         seed=args.seed,
         val_dir=args.val_dir,
         test_dir=args.test_dir,
+        num_workers=args.num_workers
         distributed=(args.local_rank is not None),   # Pass distributed flag
         local_rank=args.local_rank                     # Pass local_rank for sampler seeding if needed
     )
 
-    # Define loss function, optimizer, scheduler, and GradScaler
     if args.use_sce_loss:
         criterion = SCELoss(alpha=args.sce_alpha, beta=args.sce_beta, 
                           num_classes=2, smoothing=args.label_smoothing).to(device)
@@ -152,6 +152,7 @@ def main(args):
     # Train the model
     best_val_accuracy, test_accuracy = train_model(
         model=model,
+        batch_size=args.batch_size,
         train_loader=train_loader,
         val_loader=val_loader,
         test_loader=test_loader,
@@ -245,6 +246,22 @@ if __name__ == "__main__":
                       help="Alpha parameter for SCE loss (default: 1.0)")
     parser.add_argument("--sce_beta", type=float, default=1.0,
                       help="Beta parameter for SCE loss (default: 1.0)")
+
+    # Add label smoothing argument
+    parser.add_argument("--label_smoothing", type=float, default=0.05,
+                      help="Label smoothing factor (default: 0.05)")
+
+    # Add SCE loss arguments
+    parser.add_argument("--use_sce_loss", action='store_true',
+                      help="Use Symmetric Cross Entropy Loss instead of standard CE")
+    parser.add_argument("--sce_alpha", type=float, default=1.0,
+                      help="Alpha parameter for SCE loss (default: 1.0)")
+    parser.add_argument("--sce_beta", type=float, default=1.0,
+                      help="Beta parameter for SCE loss (default: 1.0)")
+
+    # Add input size argument
+    parser.add_argument("--input_size", type=int, default=32,
+                      help="Input image size (assumes square input, default: 32)")
 
     args = parser.parse_args()
     
