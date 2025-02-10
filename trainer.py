@@ -79,7 +79,6 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, scheduler=None, scal
 
 def train_model(
     model,
-    batch_size,
     train_loader,
     val_loader,
     test_loader,
@@ -168,7 +167,6 @@ def train_model(
         if load_from_checkpoint and rank == 0:
             print("Starting fresh training with loaded model weights")
 
-
     model = model.to(memory_format=torch.channels_last)
     
     # Enable gradient synchronization only when needed
@@ -185,7 +183,6 @@ def train_model(
         correct_predictions = torch.zeros(1, device=device)
         total_samples = 0
         
-
         train_iter = tqdm(train_loader, leave=False) if rank == 0 else train_loader
         for step, (images, labels) in enumerate(train_iter):
             # Enable gradient sync every step
@@ -197,17 +194,13 @@ def train_model(
             
             optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
 
-            # Forward pass
-            with torch.amp.autocast('cuda'):  # Changed from torch.cuda.amp.autocast()
-                outputs = model(current_images)
-                loss = criterion(outputs, current_labels)
+            with autocast('cuda'):
+                outputs = model(images)
+                loss = criterion(outputs, labels)
 
-            # Backward and optimize
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
-            optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
-
 
             running_loss += loss.detach()
             _, predicted = torch.max(outputs.data, 1)
@@ -288,7 +281,6 @@ def train_model(
                   f"Val Acc: {val_accuracy:.4f}, "
                   f"LR: {current_lr:.2e}")
 
-
         # Save checkpoint only on rank 0
         is_best = val_accuracy > best_val_accuracy
         best_val_accuracy = max(val_accuracy, best_val_accuracy)
@@ -313,7 +305,6 @@ def train_model(
             }
             save_checkpoint(checkpoint, is_best, output_dir, model_name)
 
-
     if rank == 0:
         print(f"\nBest validation accuracy achieved: {best_val_accuracy:.4f}")
         best_model_path = os.path.join(output_dir, f"{model_name}_best.pth")
@@ -326,7 +317,6 @@ def train_model(
         best_model.load_state_dict(checkpoint['model_state_dict'])
         best_model.to(device)
         best_model.eval()
-
 
         test_correct = 0
         total = 0

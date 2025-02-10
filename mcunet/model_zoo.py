@@ -53,10 +53,7 @@ NET_INFO = {
         'net_name': 'mcunet-320kb-1mb_vww',
         'description': 'MCUNet model that fits 320KB SRAM and 1MB Flash (VWW)'
     },
-    'mcunet-tiny': {
-        'net_name': 'mcunet_tiny',
-        'description': 'MCUNet model that fits 320KB SRAM and 1MB Flash (VWW)'
-    },
+
     ##### detection demo model ######
     # NOTE: we have tf-lite only for this model
     'person-det': {
@@ -68,31 +65,24 @@ NET_INFO = {
 net_id_list = list(NET_INFO.keys())
 
 url_base = "https://hanlab18.mit.edu/projects/tinyml/mcunet/release/"
-local_url = "mcunet/"
+
 
 def build_model(net_id, pretrained=True):
     assert net_id in NET_INFO, 'Invalid net_id! Select one from {})'.format(list(NET_INFO.keys()))
     net_info = NET_INFO[net_id]
-    
-    if net_id == 'mcunet-tiny':
-        # Load local model config
-        net_config_path = local_url + "mcunet_tiny.json"
-        with open(net_config_path) as f:
-            net_config = json.load(f)
-    else:
-        # Load remote model config
-        net_config_url = url_base + net_info['net_name'] + ".json"
-        net_config = json.load(open(download_url(net_config_url)))
-        
+
+    net_config_url = url_base + net_info['net_name'] + ".json"
+    sd_url = url_base + net_info['net_name'] + ".pth"
+
+    net_config = json.load(open(download_url(net_config_url)))
     resolution = net_config['resolution']
     model = ProxylessNASNets.build_from_config(net_config)
 
     if pretrained:
-        sd_url = url_base + net_info['net_name'] + ".pth"
         sd = torch.load(download_url(sd_url), map_location='cpu')
         model.load_state_dict(sd['state_dict'])
-        
     return model, resolution, net_info['description']
+
 
 def download_tflite(net_id):
     assert net_id in NET_INFO, 'Invalid net_id! Select one from {})'.format(list(NET_INFO.keys()))
