@@ -74,7 +74,7 @@ def main(args):
     # Build the model
     model, image_size, description = build_model(
         net_id=args.net_id,
-        pretrained=True,
+        pretrained=False,
     )
     print(f"Loaded model: {args.net_id}")
     print(f"Image size: {image_size}")
@@ -122,7 +122,7 @@ def main(args):
     # Create data loaders with an extra flag for distributed training
     train_loader, val_loader, test_loader = create_data_loaders(
         data_dir=args.data_dir,
-        input_shape=(144, 144, 3),  # Model's expected input size
+        input_shape=(32, 32, 3),  # Model's expected input size
         batch_size=args.batch_size,
         val_split=args.val_split,
         test_split=args.test_split,
