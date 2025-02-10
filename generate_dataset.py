@@ -33,7 +33,7 @@ def process_folder(source_folder, dest_folder, quality_files):
 def main():
     # Define paths
     quality_csv = "quality.csv"  # CSV file containing quality image filenames
-    source_base = "dataset"  # Base directory containing human and nohuman folders
+    source_base = "full_dataset_human_vs_nohuman_relabeled/"  # Base directory containing human and nohuman folders
     dest_base = "quality_dataset"  # Base directory for quality dataset
     
     # Read quality CSV file
@@ -46,8 +46,8 @@ def main():
     human_count = process_folder(source_human, dest_human, quality_files)
     
     # Process nohuman folder
-    source_nohuman = os.path.join(source_base, "nohuman")
-    dest_nohuman = os.path.join(dest_base, "nohuman")
+    source_nohuman = os.path.join(source_base, "no-human")
+    dest_nohuman = os.path.join(dest_base, "no-human")
     nohuman_count = process_folder(source_nohuman, dest_nohuman, quality_files)
     
     # Print summary
@@ -58,3 +58,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
