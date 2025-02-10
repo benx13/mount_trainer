@@ -3,44 +3,76 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import wandb
+import argparse
+import torch.distributed as dist
 from data_loaders import create_data_loaders
 from mcunet.model_zoo import build_model
-import argparse
 from trainer import train_model
 from lebel_smooth import LabelSmoothingLoss
 from losses import SCELoss
 from torch.amp import GradScaler, autocast
+from torch.nn.parallel import DistributedDataParallel as DDP
+import sys 
 
 def main(args):
-    # Initialize wandb
-    wandb.init(
-        project=args.wandb_project,
-        config={
-            "net_id": args.net_id,
-            "learning_rate": args.learning_rate,
-            "batch_size": args.batch_size,
-            "epochs": args.epochs,
-            "val_split": args.val_split,
-            "test_split": args.test_split,
-            "seed": args.seed,
-            "loss_type": "SCE" if args.use_sce_loss else "LabelSmoothing",
-            "sce_alpha": args.sce_alpha if args.use_sce_loss else None,
-            "sce_beta": args.sce_beta if args.use_sce_loss else None,
-            "label_smoothing": args.label_smoothing,
-            "input_size": args.input_size  # Add input size to wandb config
-        }
-    )
-    
-    # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    wandb.config.update({"device": str(device)})
 
+    if args.local_rank is not None:
+        torch.cuda.set_device(args.local_rank)
+        device = torch.device("cuda", args.local_rank)
+        dist.init_process_group(backend="nccl")
+    else:
+        print("Not using distributed training")
+        print("Not using distributed training")
+        print("Not using distributed training")
+        print("Not using distributed training")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Only the main process logs to wandb
+    if (not hasattr(args, 'local_rank')) or (args.local_rank == 0):
+        wandb.init(
+            project=args.wandb_project,
+            config={
+                "net_id": args.net_id,
+                "learning_rate": args.learning_rate,
+                "batch_size": args.batch_size,
+                "epochs": args.epochs,
+                "val_split": args.val_split,
+                "test_split": args.test_split,
+                "seed": args.seed,
+                "label_smoothing": args.label_smoothing,
+                "loss_type": "SCE" if args.use_sce_loss else "LabelSmoothing",
+                "sce_alpha": args.sce_alpha if args.use_sce_loss else None,
+                "sce_beta": args.sce_beta if args.use_sce_loss else None,
+            }
+        )
+        wandb.config.update({"device": str(device)})
+    else:
+        # In non-main processes you can choose to disable wandb logging or use a dummy run.
+        wandb.init(mode="disabled")
+    
+    print(f"Using device: {device}")
+    
     # Enable cuDNN benchmarking and deterministic mode
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = False
     
-    # Create model using build_model
+    # Set higher priority for GPU operations
+    if torch.cuda.is_available():
+        # Create separate streams for data transfer and computation
+        data_stream = torch.cuda.Stream()
+        compute_stream = torch.cuda.Stream()
+        torch.cuda.set_device(args.local_rank)
+        
+        # Set default stream
+        torch.cuda.set_stream(compute_stream)
+
+    # Adjust batch size more conservatively
+    if args.local_rank is not None:
+        world_size = dist.get_world_size()
+        args.batch_size = args.batch_size * (world_size // 2)  # More conservative scaling
+        args.num_workers = min(args.num_workers * (world_size // 2), os.cpu_count())
+
+    # Build the model
     model, image_size, description = build_model(
         net_id=args.net_id,
         pretrained=False,
@@ -49,29 +81,45 @@ def main(args):
     print(f"Image size: {image_size}")
     print(f"Description: {description}")
     
-    # Use channels_last memory format for better performance on NVIDIA GPUs
-    model = model.to(device, memory_format=torch.channels_last)
 
+
+    # Move model to device and set channels_last format
+    model = model.to(device, memory_format=torch.channels_last)
     if torch.cuda.is_available() and hasattr(torch, 'compile'):
         model = torch.compile(model)  # PyTorch 2.0+ optimization
-
-    # Enable gradient checkpointing if model supports it
     if hasattr(model, 'gradient_checkpointing_enable'):
         model.gradient_checkpointing_enable()
 
-    # Optimize batch size and workers based on GPU memory
-    if torch.cuda.is_available():
-        gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
-        #suggested_batch_size = min(args.batch_size, int(gpu_mem * 4))  # Rough estimate
-        #suggested_workers = min(os.cpu_count(), int(gpu_mem * 2))
-        
-        #args.batch_size = 512#suggested_batch_size
-        #args.num_workers = suggested_workers
-        
-        print(f"Optimized batch size: {args.batch_size}")
-        print(f"Optimized num workers: {args.num_workers}")
+    # Wrap model with DistributedDataParallel if in distributed mode
+    if args.local_rank is not None:
+        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
 
-    # Create data loaders with optimized settings
+    # Load weights from checkpoint if specified
+    if args.load_from:
+        if os.path.exists(args.load_from):
+            print(f"Loading model weights from checkpoint: {args.load_from}")
+            checkpoint = torch.load(args.load_from)
+            model.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            print(f"Warning: Checkpoint file not found: {args.load_from}")
+
+    print(args.resume_from)
+    print(args.resume_from)
+    print(args.resume_from)
+    print(args.resume_from)
+    print(args.resume_from)
+    print(args.resume_from)
+    print(args.resume_from)
+    print('--------------------------------')
+    print('--------------------------------')
+    print('--------------------------------')
+    print('--------------------------------')
+    print('--------------------------------')
+    print('--------------------------------')
+    print('--------------------------------')
+    print('--------------------------------')
+    print('--------------------------------')
+    # Create data loaders with an extra flag for distributed training
     train_loader, val_loader, test_loader = create_data_loaders(
         data_dir=args.data_dir,
         input_shape=(args.input_size, args.input_size, 3),  # Use input_size parameter
@@ -82,9 +130,10 @@ def main(args):
         val_dir=args.val_dir,
         test_dir=args.test_dir,
         num_workers=args.num_workers
+        distributed=(args.local_rank is not None),   # Pass distributed flag
+        local_rank=args.local_rank                     # Pass local_rank for sampler seeding if needed
     )
 
-    # Define loss function, optimizer and scheduler
     if args.use_sce_loss:
         criterion = SCELoss(alpha=args.sce_alpha, beta=args.sce_beta, 
                           num_classes=2, smoothing=args.label_smoothing).to(device)
@@ -93,13 +142,14 @@ def main(args):
     else:
         criterion = LabelSmoothingLoss(smoothing=args.label_smoothing).to(device)
         print("Using Label Smoothing CE Loss with smoothing={}".format(args.label_smoothing))
+
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', patience=5, factor=0.5, verbose=True
     )
-    scaler = GradScaler('cuda')  # Initialize GradScaler
+    scaler = GradScaler('cuda')
 
-    # Train the model using train_model function
+    # Train the model
     best_val_accuracy, test_accuracy = train_model(
         model=model,
         batch_size=args.batch_size,
@@ -112,20 +162,31 @@ def main(args):
         scaler=scaler,
         device=device,
         epochs=args.epochs,
-        output_dir=args.checkpoint_dir,
+        output_dir=args.resume_from if args.resume_from is not None else args.checkpoint_dir,
         model_name=args.net_id,
         net_id=args.net_id,
         num_classes=2,
-        resume_training=args.resume_from is not None
+        rank=args.local_rank,
+        resume_training=(args.resume_from is not None),
+        load_from_checkpoint=(args.load_from is not None)
     )
 
-    print(f"\nTraining completed!")
-    print(f"Best validation accuracy: {best_val_accuracy:.2f}%")
-    print(f"Test accuracy: {test_accuracy:.2f}%")
+    # Only rank 0 prints the final results
+    if (not hasattr(args, 'local_rank')) or (args.local_rank == 0):
+        print(f"\nTraining completed!")
+        print(f"Best validation accuracy: {best_val_accuracy:.2f}%")
+        print(f"Test accuracy: {test_accuracy:.2f}%")
+
+    # Cleanup distributed process group
+    if args.local_rank is not None:
+        dist.destroy_process_group()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train MCUNet model on Wake Vision dataset")
-    
+    print("sys.argv:", sys.argv)
+    import os
+    print("LOCAL_RANK from env:", os.environ.get("LOCAL_RANK"))
+
     # Wandb arguments
     parser.add_argument("--wandb-project", type=str, default="mcunet-training",
                         help="Weights & Biases project name")
@@ -167,6 +228,24 @@ if __name__ == "__main__":
                       help="Directory to save checkpoints")
     parser.add_argument("--resume_from", type=str,
                       help="Path to checkpoint to resume training from")
+    parser.add_argument("--load_from", type=str,
+                      help="Path to checkpoint to load model weights from (starts fresh training)")
+    
+    # Distributed training argument
+    parser.add_argument("--local_rank", type=int, default=None,
+                      help="Local rank for distributed training")
+
+    # Add label smoothing argument
+    parser.add_argument("--label_smoothing", type=float, default=0.05,
+                      help="Label smoothing factor (default: 0.05)")
+
+    # Add SCE loss arguments
+    parser.add_argument("--use_sce_loss", action='store_true',
+                      help="Use Symmetric Cross Entropy Loss instead of standard CE")
+    parser.add_argument("--sce_alpha", type=float, default=1.0,
+                      help="Alpha parameter for SCE loss (default: 1.0)")
+    parser.add_argument("--sce_beta", type=float, default=1.0,
+                      help="Beta parameter for SCE loss (default: 1.0)")
 
     # Add label smoothing argument
     parser.add_argument("--label_smoothing", type=float, default=0.05,
@@ -186,6 +265,14 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     
+    if args.local_rank is None:
+        local_rank_env = os.environ.get("LOCAL_RANK")
+        if local_rank_env is not None:
+            args.local_rank = int(local_rank_env)
+        else:
+            args.local_rank = 0  # default to 0 if nothing is found
+    print(f"Process started with local_rank: {args.local_rank}")
+
     # Validate directory arguments
     if (args.val_dir and not args.test_dir) or (args.test_dir and not args.val_dir):
         parser.error("If providing separate validation/test directories, both --val_dir and --test_dir must be specified")

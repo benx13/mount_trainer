@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, DistributedSampler
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import cv2
@@ -173,7 +173,9 @@ def create_data_loaders(
     num_workers=32,
     seed=42,
     val_dir=None,
-    test_dir=None
+    test_dir=None,
+    distributed=False,      # New parameter to indicate distributed mode
+    local_rank=0           # Local rank (for reproducibility in the sampler)
 ):
     """
     Creates data loaders for training, validation, and testing using data from disk in ImageNet format.
@@ -191,6 +193,8 @@ def create_data_loaders(
         seed (int): Random seed for reproducibility
         val_dir (str, optional): Directory containing validation dataset. If provided, val_split is ignored
         test_dir (str, optional): Directory containing test dataset. If provided, test_split is ignored
+        distributed (bool): Whether to use distributed training mode
+        local_rank (int): Local rank for distributed training
 
     Returns:
         tuple: (train_loader, val_loader, test_loader) - PyTorch DataLoaders for each split
@@ -205,10 +209,6 @@ def create_data_loaders(
     # Get augmentation pipelines
     train_transform = get_augmentation_pipeline(train=True, img_size=input_shape[0])
     val_transform = get_augmentation_pipeline(train=False, img_size=input_shape[0])
-
-    # Calculate appropriate number of workers if not specified
-    # if num_workers is None:
-    #     num_workers = min(8, os.cpu_count() or 1)  # Use at most 8 workers
 
     # Case 1: Using separate directories for validation and test
     if val_dir and test_dir:
@@ -264,36 +264,75 @@ def create_data_loaders(
         raise ValueError("Classes are not consistent across train, validation, and test sets")
 
     print(f"Classes: {sorted(train_classes)}")
-    
-    # Create data loaders
+    print(f"Process started with local_rank: {local_rank}")
+
+
+    if distributed:
+        train_sampler = DistributedSampler(
+            train_dataset,
+            num_replicas=torch.distributed.get_world_size(),
+            rank=local_rank,
+            shuffle=True,
+            seed=seed
+        )
+        shuffle_flag = False
+    else:
+        train_sampler = None
+        shuffle_flag = True
+
     train_loader = DataLoader(
-        train_dataset, 
+        train_dataset,
         batch_size=batch_size, 
-        shuffle=True, 
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=True,  # Keep workers alive between epochs
-        prefetch_factor=2,       # Number of batches loaded in advance by each worker
-    )
-    
-    val_loader = DataLoader(
-        val_dataset, 
-        batch_size=batch_size * 2,  # Can use larger batch size for validation
-        shuffle=False, 
+        shuffle=shuffle_flag, 
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True,
         prefetch_factor=2,
+        sampler=train_sampler,
+        drop_last=True,
+        multiprocessing_context='fork'
+    )
+    
+    # For validation and testing, you can either use a DistributedSampler as well (if you want distributed evaluation)
+    # or simply set shuffle=False. Often, you may run evaluation only on rank 0.
+    # Here we use a sampler for consistency:
+    if distributed:
+        val_sampler = DistributedSampler(val_dataset, num_replicas=torch.distributed.get_world_size(), rank=local_rank, shuffle=False)
+        test_sampler = DistributedSampler(test_dataset, num_replicas=torch.distributed.get_world_size(), rank=local_rank, shuffle=False)
+    else:
+        val_sampler = None
+        test_sampler = None
+
+    val_workers = max(2, num_workers // 4)
+    
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=batch_size * 2,
+        shuffle=False, 
+        num_workers=val_workers,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2,
+        sampler=val_sampler,
+        drop_last=False,
+        multiprocessing_context='fork'
     )
     
     test_loader = DataLoader(
         test_dataset, 
-        batch_size=batch_size * 2,  # Can use larger batch size for testing
+        batch_size=batch_size * 2,
         shuffle=False, 
-        num_workers=max(1, num_workers//2),
+        num_workers=val_workers,
         pin_memory=True,
         persistent_workers=True,
         prefetch_factor=2,
+        sampler=test_sampler,
+        drop_last=False
     )
+    # For the training dataset, use DistributedSampler if distributed training is enabled
+    if local_rank == 0:
+        print(f"Train dataset length: {len(train_dataset)}, Sampler length: {len(train_sampler)}")
+    if local_rank == 1:
+        print(f"Train dataset length: {len(train_dataset)}, Sampler length: {len(train_sampler)}")
 
     return train_loader, val_loader, test_loader

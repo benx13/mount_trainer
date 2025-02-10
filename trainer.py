@@ -4,6 +4,9 @@ from tqdm import tqdm
 import os
 import wandb
 from torch.amp import GradScaler, autocast # Import GradScaler and autocast
+import time
+from torch.nn.parallel import DistributedDataParallel
+import torch.distributed as dist
 
 def save_checkpoint(state, is_best, output_dir, model_name):
     """Save model checkpoint and optionally log to wandb."""
@@ -90,7 +93,9 @@ def train_model(
     model_name,
     net_id,
     num_classes,
-    resume_training=False
+    rank=0,
+    resume_training=False,
+    load_from_checkpoint=False
 ):
     """
     Train a model with the given parameters and data loaders.
@@ -108,14 +113,44 @@ def train_model(
         model_name: Name of the model for saving checkpoints
         net_id: ID of the network architecture
         num_classes: Number of output classes
-        resume_training: Whether to resume from latest checkpoint
+        resume_training: Whether to resume from latest checkpoint with same training state
+        load_from_checkpoint: Whether model was loaded from checkpoint (but starting fresh training)
+        rank: Process rank in distributed training (default: 0)
     
     Returns:
         float: Best validation accuracy achieved
         float: Test accuracy of the best model
     """
     # Initialize best accuracy and start epoch
+    print(output_dir)
+    print(output_dir)
+    print(output_dir)
+    print(output_dir)
+    print(output_dir)
+    print(output_dir)
+    print(output_dir)
+    print(output_dir)
+    print(output_dir)
+    print(output_dir)
+    print(output_dir)
+    print(output_dir)
+    print(output_dir)
+    print(output_dir)
+    print(output_dir)
     latest_checkpoint = os.path.join(output_dir, f"{model_name}_latest.pth")
+    print(latest_checkpoint)
+    print(latest_checkpoint)
+    print(latest_checkpoint)
+    print(latest_checkpoint)
+    print(latest_checkpoint)
+    print(latest_checkpoint)
+    print(latest_checkpoint)
+    print(latest_checkpoint)
+    print(latest_checkpoint)
+    print(latest_checkpoint)
+    print(latest_checkpoint)
+    print(latest_checkpoint)
+    print(latest_checkpoint)
     if resume_training and os.path.exists(latest_checkpoint):
         start_epoch, best_val_accuracy = load_checkpoint(
             latest_checkpoint,
@@ -124,49 +159,43 @@ def train_model(
             scheduler=scheduler,
             scaler=scaler
         )
-        print(f"Resuming training from epoch {start_epoch} with best validation accuracy: {best_val_accuracy:.4f}")
+        if rank == 0:
+            print(f"Resuming training from epoch {start_epoch} with best validation accuracy: {best_val_accuracy:.4f}")
     else:
+        # When loading from checkpoint but starting fresh, or starting completely new
         start_epoch = 0
         best_val_accuracy = 0.0
+        if load_from_checkpoint and rank == 0:
+            print("Starting fresh training with loaded model weights")
 
-    # Move these operations outside the epoch loop since they only need to be done once
+
     model = model.to(memory_format=torch.channels_last)
     
-    # Pre-allocate tensors for predictions - change dtype to match model output
-    pred_labels = torch.empty(batch_size, dtype=torch.long, device=device)
-    max_vals = torch.empty(batch_size, dtype=torch.half, device=device)  # Change to half precision
-    
-    # Enable torch.backends.cuda.matmul.allow_tf32 = True  # Add at the start
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
+    # Enable gradient synchronization only when needed
+    if isinstance(model, DistributedDataParallel):
+        model.require_backward_grad_sync = False
     
     for epoch in range(start_epoch, epochs):
+        if hasattr(train_loader, "sampler") and hasattr(train_loader.sampler, "set_epoch"):
+            train_loader.sampler.set_epoch(epoch)
+        
         # Training phase
         model.train()
-        running_loss = 0.0
-        correct_predictions = 0
+        running_loss = torch.zeros(1, device=device)
+        correct_predictions = torch.zeros(1, device=device)
         total_samples = 0
         
-        # Prefetch next batch
-        train_iter = iter(train_loader)
-        try:
-            next_images, next_labels = next(train_iter)
-            next_images = next_images.to(device, memory_format=torch.channels_last, non_blocking=True)
-            next_labels = next_labels.to(device, non_blocking=True)
-        except StopIteration:
-            pass
 
-        train_loop = tqdm(range(len(train_loader)), leave=False)
-        for i in train_loop:
-            current_images, current_labels = next_images, next_labels
+        train_iter = tqdm(train_loader, leave=False) if rank == 0 else train_loader
+        for step, (images, labels) in enumerate(train_iter):
+            # Enable gradient sync every step
+            if isinstance(model, DistributedDataParallel):
+                model.require_backward_grad_sync = True
             
-            # Prefetch next batch
-            try:
-                next_images, next_labels = next(train_iter)
-                next_images = next_images.to(device, memory_format=torch.channels_last, non_blocking=True)
-                next_labels = next_labels.to(device, non_blocking=True)
-            except StopIteration:
-                pass
+            images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+            
+            optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
 
             # Forward pass
             with torch.amp.autocast('cuda'):  # Changed from torch.cuda.amp.autocast()
@@ -179,39 +208,44 @@ def train_model(
             scaler.update()
             optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
 
-            # Compute accuracy (more efficient)
-            with torch.no_grad(), torch.amp.autocast('cuda'):  # Add autocast here too
-                torch.max(outputs.data, 1, out=(max_vals, pred_labels))
-                correct_predictions += (pred_labels == current_labels).sum().item()
-                total_samples += current_labels.size(0)
 
-            running_loss += loss.item()
-            
-            train_loop.set_description(f"Epoch [{epoch+1}/{epochs}]")
-            train_loop.set_postfix(
-                train_loss=running_loss / (i + 1),
-                train_acc=correct_predictions / total_samples
-            )
+            running_loss += loss.detach()
+            _, predicted = torch.max(outputs.data, 1)
+            total_samples += labels.size(0)
+            correct_predictions += (predicted == labels).sum()
 
-        train_accuracy = correct_predictions / total_samples
-        train_loss = running_loss / len(train_loader)
+            if rank == 0:
+                train_iter.set_description(f"Epoch [{epoch+1}/{epochs}]")
+                train_iter.set_postfix(
+                    train_loss=running_loss.item() / (step + 1),
+                    train_acc=correct_predictions.item() / total_samples
+                )
+
+        # Synchronize metrics across GPUs if in distributed mode
+        if isinstance(model, DistributedDataParallel):
+            dist.all_reduce(running_loss)
+            dist.all_reduce(correct_predictions)
+            total_samples = total_samples * dist.get_world_size()
+        train_accuracy = correct_predictions.item() / total_samples
+        train_loss = running_loss.item() / len(train_loader)
         
-        # Log training metrics to wandb
-        wandb.log({
-            'train/loss': train_loss,
-            'train/accuracy': train_accuracy,
-            'train/epoch': epoch + 1
-        })
+        # Log training metrics to wandb only on rank 0
+        if rank == 0:
+            wandb.log({
+                'train/loss': train_loss,
+                'train/accuracy': train_accuracy,
+                'train/epoch': epoch + 1
+            })
 
         # Validation phase
         model.eval()
         val_loss = 0.0
         val_correct_predictions = 0
         val_total_samples = 0
-        val_loop = tqdm(val_loader, leave=False)
+        val_iter = tqdm(val_loader, leave=False) if rank == 0 else val_loader
         
         with torch.no_grad():
-            for images, labels in val_loop:
+            for images, labels in val_iter:
                 # Move to GPU with channels_last and non_blocking
                 images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
                 labels = labels.to(device, non_blocking=True)
@@ -222,41 +256,49 @@ def train_model(
                 _, predicted = torch.max(outputs.data, 1)
                 val_total_samples += labels.size(0)
                 val_correct_predictions += (predicted == labels).sum().item()
-                val_loop.set_description(f"Epoch [{epoch+1}/{epochs}]")
-                val_loop.set_postfix(
-                    val_loss=val_loss / (val_loop.n + 1e-5),
-                    val_acc=val_correct_predictions / val_total_samples
-                )
+                
+                if rank == 0:
+                    val_iter.set_description(f"Epoch [{epoch+1}/{epochs}]")
+                    val_iter.set_postfix(
+                        val_loss=val_loss / (val_iter.n + 1e-5),
+                        val_acc=val_correct_predictions / val_total_samples
+                    )
 
         val_accuracy = val_correct_predictions / val_total_samples
         val_loss = val_loss / len(val_loader)
 
-        # Log validation metrics to wandb
-        wandb.log({
-            'val/loss': val_loss,
-            'val/accuracy': val_accuracy,
-            'val/epoch': epoch + 1,
-            'learning_rate': optimizer.param_groups[0]['lr']
-        })
+        # Log validation metrics to wandb only on rank 0
+        if rank == 0:
+            wandb.log({
+                'val/loss': val_loss,
+                'val/accuracy': val_accuracy,
+                'val/epoch': epoch + 1,
+                'learning_rate': optimizer.param_groups[0]['lr']
+            })
         
         # Step the scheduler based on validation loss
         scheduler.step(val_loss)
         current_lr = optimizer.param_groups[0]['lr']
 
-        print(f"Epoch [{epoch+1}/{epochs}], "
-              f"Train Loss: {train_loss:.4f}, "
-              f"Train Acc: {train_accuracy:.4f}, "
-              f"Val Loss: {val_loss:.4f}, "
-              f"Val Acc: {val_accuracy:.4f}, "
-              f"LR: {current_lr:.2e}")
+        if rank == 0:
+            print(f"Epoch [{epoch+1}/{epochs}], "
+                  f"Train Loss: {train_loss:.4f}, "
+                  f"Train Acc: {train_accuracy:.4f}, "
+                  f"Val Loss: {val_loss:.4f}, "
+                  f"Val Acc: {val_accuracy:.4f}, "
+                  f"LR: {current_lr:.2e}")
 
-        # Reduce frequency of checkpoint saving
+
+        # Save checkpoint only on rank 0
         is_best = val_accuracy > best_val_accuracy
         best_val_accuracy = max(val_accuracy, best_val_accuracy)
         
-        # Only save checkpoint if it's the best model or every N epochs
-        should_save = is_best or (epoch + 1) % 5 == 0  # Save every 5 epochs
-        if should_save:
+        if rank == 0:
+            # Log best metrics to wandb
+            if is_best:
+                wandb.run.summary['best_val_accuracy'] = best_val_accuracy
+            
+            # Prepare checkpoint
             checkpoint = {
                 'epoch': epoch + 1,
                 'model_state_dict': model.state_dict(),
@@ -271,50 +313,51 @@ def train_model(
             }
             save_checkpoint(checkpoint, is_best, output_dir, model_name)
 
-        # Ensure CUDA operations are complete before moving to next epoch
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
 
-    print(f"\nBest validation accuracy achieved: {best_val_accuracy:.4f}")
-    best_model_path = os.path.join(output_dir, f"{model_name}_best.pth")
-    print(f"Best model saved to: {best_model_path}")
+    if rank == 0:
+        print(f"\nBest validation accuracy achieved: {best_val_accuracy:.4f}")
+        best_model_path = os.path.join(output_dir, f"{model_name}_best.pth")
+        print(f"Best model saved to: {best_model_path}")
 
-    # Testing phase - use the best model for testing
-    from mcunet.model_zoo import build_model
-    best_model = build_model(net_id=net_id, pretrained=False)[0]
-    checkpoint = torch.load(best_model_path)
-    best_model.load_state_dict(checkpoint['model_state_dict'])
-    best_model.to(device)
-    best_model.eval()
+        # Testing phase - use the best model for testing
+        from mcunet.model_zoo import build_model
+        best_model = build_model(net_id=net_id, pretrained=False)[0]
+        checkpoint = torch.load(best_model_path)
+        best_model.load_state_dict(checkpoint['model_state_dict'])
+        best_model.to(device)
+        best_model.eval()
 
-    test_correct = 0
-    total = 0
-    test_loop = tqdm(test_loader, leave=False)
+
+        test_correct = 0
+        total = 0
+        test_loop = tqdm(test_loader, leave=False)
+        
+        with torch.no_grad():
+            for images, labels in test_loop:
+                # Move to GPU with channels_last and non_blocking
+                images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
+                
+                outputs = best_model(images)
+                _, predicted = torch.max(outputs.data, 1)
+                total += labels.size(0)
+                test_correct += (predicted == labels).sum().item()
+
+        test_accuracy = test_correct / total
+        
+        # Log final test metrics to wandb
+        wandb.run.summary.update({
+            'test/accuracy': test_accuracy,
+            'test/correct': test_correct,
+            'test/total': total,
+            'test/wrong': total - test_correct
+        })
+        
+        print(f"\nTest accuracy of the best model: {test_accuracy:.4f}\n")
+
+        # Finish the wandb run
+        wandb.finish()
+
+        return best_val_accuracy, test_accuracy
     
-    with torch.no_grad():
-        for images, labels in test_loop:
-            # Move to GPU with channels_last and non_blocking
-            images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
-            labels = labels.to(device, non_blocking=True)
-            
-            outputs = best_model(images)
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            test_correct += (predicted == labels).sum().item()
-
-    test_accuracy = test_correct / total
-    
-    # Log final test metrics to wandb
-    wandb.run.summary.update({
-        'test/accuracy': test_accuracy,
-        'test/correct': test_correct,
-        'test/total': total,
-        'test/wrong': total - test_correct
-    })
-    
-    print(f"\nTest accuracy of the best model: {test_accuracy:.4f}\n")
-
-    # Finish the wandb run
-    wandb.finish()
-
-    return best_val_accuracy, test_accuracy
+    return best_val_accuracy, 0.0  # Return 0.0 as test accuracy for non-rank-0 processes

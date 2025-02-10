@@ -15,25 +15,27 @@ class SCELoss(nn.Module):
         self.smoothing = smoothing
         self.cross_entropy = nn.CrossEntropyLoss()
         self.register_buffer('uniform_labels', torch.ones(num_classes) / num_classes)
-        self.register_buffer('eps', torch.tensor(1e-7))
-        self.register_buffer('one_hot_eps', torch.tensor(1e-4))
 
     def forward(self, pred, labels):
+        # Move tensors to the same device as pred
+        device = pred.device
+        
         # CCE
         ce = self.cross_entropy(pred, labels)
 
-        # RCE - use more efficient operations
-        with torch.amp.autocast('cuda', enabled=False):  # Use fp32 for stability
-            pred_softmax = F.softmax(pred.float(), dim=1).clamp(min=self.eps)
-            # One-hot with smoothing in one operation
-            label_one_hot = F.one_hot(labels, self.num_classes).float()
-            if self.smoothing > 0.0:
-                label_one_hot = label_one_hot * (1 - self.smoothing) + self.smoothing * self.uniform_labels
-            label_one_hot = label_one_hot.clamp(min=self.one_hot_eps)
+        # RCE
+        pred = F.softmax(pred, dim=1)
+        pred = torch.clamp(pred, min=1e-7, max=1.0)
+        
+        # Create one-hot labels on GPU directly
+        label_one_hot = F.one_hot(labels, self.num_classes).float().to(device)
+        
+        if self.smoothing > 0.0:
+            label_one_hot = label_one_hot * (1 - self.smoothing) + self.smoothing * self.uniform_labels.to(device)
             
-            # Compute RCE more efficiently
-            rce = -(pred_softmax * label_one_hot.log()).sum(dim=1)
+        label_one_hot = torch.clamp(label_one_hot, min=1e-4, max=1.0)
+        rce = (-1*torch.sum(pred * torch.log(label_one_hot), dim=1))
 
-        # Combine losses
+        # Loss
         loss = self.alpha * ce + self.beta * rce.mean()
-        return loss 
+        return loss
