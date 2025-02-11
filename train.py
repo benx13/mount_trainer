@@ -143,8 +143,12 @@ def main(args):
         print("Using SCE Loss with alpha={}, beta={}, smoothing={}".format(
             args.sce_alpha, args.sce_beta, args.label_smoothing))
     else:
-        criterion = LabelSmoothingLoss(smoothing=args.label_smoothing).to(device)
-        print("Using Label Smoothing CE Loss with smoothing={}".format(args.label_smoothing))
+        if args.label_smoothing > 0:
+            criterion = LabelSmoothingLoss(smoothing=args.label_smoothing).to(device)
+            print("Using Label Smoothing CE Loss with smoothing={}".format(args.label_smoothing))
+        else:
+            criterion = nn.CrossEntropyLoss().to(device)
+            print("Using standard CrossEntropyLoss")
 
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
     
