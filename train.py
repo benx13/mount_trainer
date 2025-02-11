@@ -32,6 +32,7 @@ def main(args):
             project=args.wandb_project,
             config={
                 "net_id": args.net_id,
+                "pretrained": args.pretrained,
                 "learning_rate": args.learning_rate,
                 "batch_size": args.batch_size,
                 "epochs": args.epochs,
@@ -42,6 +43,7 @@ def main(args):
                 "loss_type": "SCE" if args.use_sce_loss else "LabelSmoothing",
                 "sce_alpha": args.sce_alpha if args.use_sce_loss else None,
                 "sce_beta": args.sce_beta if args.use_sce_loss else None,
+                "scheduler": args.scheduler,
             }
         )
         wandb.config.update({"device": str(device)})
@@ -74,9 +76,10 @@ def main(args):
     # Build the model
     model, image_size, description = build_model(
         net_id=args.net_id,
-        pretrained=False,
+        pretrained=args.pretrained,
     )
     print(f"Loaded model: {args.net_id}")
+    print(f"Using pretrained weights: {args.pretrained}")
     print(f"Image size: {image_size}")
     print(f"Description: {description}")
     
@@ -144,9 +147,19 @@ def main(args):
         print("Using Label Smoothing CE Loss with smoothing={}".format(args.label_smoothing))
 
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.0005)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', patience=5, factor=0.5, verbose=True
-    )
+    
+    # Initialize scheduler based on argument
+    if args.scheduler == "cosine":
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, 
+            T_max=args.epochs,
+            eta_min=1e-6
+        )
+    else:  # reduce_on_plateau
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', patience=5, factor=0.5, verbose=True
+        )
+    
     scaler = GradScaler('cuda')
 
     # Train the model
@@ -197,6 +210,8 @@ if __name__ == "__main__":
     # Model arguments
     parser.add_argument("--net_id", type=str, default="mcunet-vww2",
                       help="Model ID from MCUNet model zoo")
+    parser.add_argument("--pretrained", action="store_true", default=False,
+                      help="Use pretrained weights (default: False)")
     
     # Data arguments
     parser.add_argument("--data_dir", type=str, required=True,
@@ -245,6 +260,11 @@ if __name__ == "__main__":
                       help="Alpha parameter for SCE loss (default: 1.0)")
     parser.add_argument("--sce_beta", type=float, default=1.0,
                       help="Beta parameter for SCE loss (default: 1.0)")
+    
+    # Add scheduler argument
+    parser.add_argument("--scheduler", type=str, default="cosine",
+                      choices=["cosine", "reduce_on_plateau"],
+                      help="Learning rate scheduler (default: cosine)")
 
     args = parser.parse_args()
     
