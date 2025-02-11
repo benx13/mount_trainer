@@ -40,7 +40,7 @@ def main(args):
                 "test_split": args.test_split,
                 "seed": args.seed,
                 "label_smoothing": args.label_smoothing,
-                "loss_type": "SCE" if args.use_sce_loss else "LabelSmoothing",
+                "loss_type": "SCE" if args.use_sce_loss else ("LabelSmoothing" if args.label_smoothing > 0 else "CE"),
                 "sce_alpha": args.sce_alpha if args.use_sce_loss else None,
                 "sce_beta": args.sce_beta if args.use_sce_loss else None,
                 "scheduler": args.scheduler,
@@ -258,8 +258,9 @@ if __name__ == "__main__":
                       help="Label smoothing factor (default: 0.05)")
 
     # Add SCE loss arguments
-    parser.add_argument("--use_sce_loss", action='store_true',
-                      help="Use Symmetric Cross Entropy Loss instead of standard CE")
+    parser.add_argument("--use_sce_loss", type=str, default="false",
+                      choices=["true", "false"],
+                      help="Use Symmetric Cross Entropy Loss (true/false)")
     parser.add_argument("--sce_alpha", type=float, default=1.0,
                       help="Alpha parameter for SCE loss (default: 1.0)")
     parser.add_argument("--sce_beta", type=float, default=1.0,
@@ -271,6 +272,9 @@ if __name__ == "__main__":
                       help="Learning rate scheduler (default: cosine)")
 
     args = parser.parse_args()
+    
+    # Convert string to boolean
+    args.use_sce_loss = args.use_sce_loss.lower() == "true"
     
     if args.local_rank is None:
         local_rank_env = os.environ.get("LOCAL_RANK")
