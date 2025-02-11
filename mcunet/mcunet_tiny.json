@@ -124,6 +124,6 @@
       "dropout_rate": 0,
       "ops_order": "weight_bn_act"
     },
-    "resolution": 32
+    "resolution": 64
   }
   

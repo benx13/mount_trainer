@@ -39,7 +39,7 @@ def move_misplaced_images(csv_file, dir1, dir2):
                 shutil.move(source_file, destination_file)
                 moved_count += 1
             else:
-                print(f"File '{image}' not found in {dir2}.")
+                #print(f"File '{image}' not found in {dir2}.")
                 not_found_count += 1
 
     print(f"\nCompleted: Moved {moved_count} files, {not_found_count} files were not found in {dir2}, {found_count} files were already in {dir1}.")
