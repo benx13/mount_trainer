@@ -53,8 +53,8 @@ NET_INFO = {
         'net_name': 'mcunet-320kb-1mb_vww',
         'description': 'MCUNet model that fits 320KB SRAM and 1MB Flash (VWW)'
     },
-    'mcunet-tiny': {
-        'net_name': 'mcunet_tiny',
+    'mcunet-tiny2': {
+        'net_name': 'mcunet_tiny2',
         'description': 'MCUNet model that fits 320KB SRAM and 1MB Flash (VWW)'
     },
     ##### detection demo model ######
@@ -74,9 +74,9 @@ def build_model(net_id, pretrained=True):
     assert net_id in NET_INFO, 'Invalid net_id! Select one from {})'.format(list(NET_INFO.keys()))
     net_info = NET_INFO[net_id]
     
-    if net_id == 'mcunet-tiny':
+    if net_id == 'mcunet-tiny2':
         # Load local model config
-        net_config_path = local_url + "mcunet_tiny.json"
+        net_config_path = local_url + "mcunet_tiny2.json"
         with open(net_config_path) as f:
             net_config = json.load(f)
     else:
