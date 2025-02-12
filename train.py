@@ -83,25 +83,6 @@ def main(args):
     print(f"Image size: {image_size}")
     print(f"Description: {description}")
     
-    # Build teacher model if specified
-    teacher_model = None
-    if args.teacher_model_id:
-        teacher_model, _, _ = build_model(
-            net_id=args.teacher_model_id,
-            pretrained=True,  # Teacher should typically use pretrained weights
-        )
-        # Load teacher weights if specified
-        if args.teacher_checkpoint:
-            print(f"Loading teacher weights from: {args.teacher_checkpoint}")
-            checkpoint = torch.load(args.teacher_checkpoint)
-            teacher_model.load_state_dict(checkpoint['model_state_dict'])
-        
-        teacher_model = teacher_model.to(device, memory_format=torch.channels_last)
-        teacher_model.eval()  # Set teacher to evaluation mode
-        
-        # Wrap teacher with DDP if in distributed mode
-        if args.local_rank is not None:
-            teacher_model = DDP(teacher_model, device_ids=[args.local_rank], output_device=args.local_rank)
 
     # Move model to device and set channels_last format
     model = model.to(device, memory_format=torch.channels_last)
@@ -124,6 +105,7 @@ def main(args):
         else:
             print(f"Warning: Checkpoint file not found: {args.load_from}")
 
+
     print(args.resume_from)
     print(args.resume_from)
     print(args.resume_from)
@@ -140,6 +122,27 @@ def main(args):
     print('--------------------------------')
     print('--------------------------------')
     print('--------------------------------')
+
+    # Build teacher model if specified
+    teacher_model = None
+    if args.teacher_model_id:
+        teacher_model, _, _ = build_model(
+            net_id=args.teacher_model_id,
+            pretrained=True,  # Teacher should typically use pretrained weights
+        )
+        # Load teacher weights if specified
+        if args.teacher_checkpoint:
+            print(f"Loading teacher weights from: {args.teacher_checkpoint}")
+            checkpoint = torch.load(args.teacher_checkpoint)
+            teacher_model.load_state_dict(checkpoint['model_state_dict'])
+        
+        teacher_model = teacher_model.to(device, memory_format=torch.channels_last)
+        teacher_model.eval()  # Set teacher to evaluation mode
+        
+        # Wrap teacher with DDP if in distributed mode
+        if args.local_rank is not None:
+            teacher_model = DDP(teacher_model, device_ids=[args.local_rank], output_device=args.local_rank)
+
     # Create data loaders with an extra flag for distributed training
     train_loader, val_loader, test_loader = create_data_loaders(
         data_dir=args.data_dir,
