@@ -73,7 +73,7 @@ def main(args):
         args.batch_size = args.batch_size * (world_size // 2)  # More conservative scaling
         args.num_workers = min(args.num_workers * (world_size // 2), os.cpu_count())
 
-    # Build the model
+    # Build the student model
     model, image_size, description = build_model(
         net_id=args.net_id,
         pretrained=args.pretrained,
@@ -83,7 +83,25 @@ def main(args):
     print(f"Image size: {image_size}")
     print(f"Description: {description}")
     
-
+    # Build teacher model if specified
+    teacher_model = None
+    if args.teacher_model_id:
+        teacher_model, _, _ = build_model(
+            net_id=args.teacher_model_id,
+            pretrained=True,  # Teacher should typically use pretrained weights
+        )
+        # Load teacher weights if specified
+        if args.teacher_checkpoint:
+            print(f"Loading teacher weights from: {args.teacher_checkpoint}")
+            checkpoint = torch.load(args.teacher_checkpoint)
+            teacher_model.load_state_dict(checkpoint['model_state_dict'])
+        
+        teacher_model = teacher_model.to(device, memory_format=torch.channels_last)
+        teacher_model.eval()  # Set teacher to evaluation mode
+        
+        # Wrap teacher with DDP if in distributed mode
+        if args.local_rank is not None:
+            teacher_model = DDP(teacher_model, device_ids=[args.local_rank], output_device=args.local_rank)
 
     # Move model to device and set channels_last format
     model = model.to(device, memory_format=torch.channels_last)
@@ -184,7 +202,11 @@ def main(args):
         num_classes=2,
         rank=args.local_rank,
         resume_training=(args.resume_from is not None),
-        load_from_checkpoint=(args.load_from is not None)
+        load_from_checkpoint=(args.load_from is not None),
+        teacher_model=teacher_model,
+        temp=args.temperature,
+        alpha=args.distillation_alpha,
+        use_sce_loss=args.use_sce_loss,
     )
 
     # Only rank 0 prints the final results
@@ -270,6 +292,16 @@ if __name__ == "__main__":
     parser.add_argument("--scheduler", type=str, default="cosine",
                       choices=["cosine", "reduce_on_plateau"],
                       help="Learning rate scheduler (default: cosine)")
+
+    # Add knowledge distillation arguments
+    parser.add_argument("--teacher-model-id", type=str,
+                      help="Model ID for teacher model (if using knowledge distillation)")
+    parser.add_argument("--teacher-checkpoint", type=str,
+                      help="Path to teacher model checkpoint")
+    parser.add_argument("--temperature", type=float, default=4.0,
+                      help="Temperature parameter for knowledge distillation")
+    parser.add_argument("--distillation-alpha", type=float, default=0.5,
+                      help="Weight for knowledge distillation loss (0-1)")
 
     args = parser.parse_args()
     

@@ -7,6 +7,7 @@ from torch.amp import GradScaler, autocast # Import GradScaler and autocast
 import time
 from torch.nn.parallel import DistributedDataParallel
 import torch.distributed as dist
+import torch.nn.functional as F
 
 def save_checkpoint(state, is_best, output_dir, model_name):
     """Save model checkpoint and optionally log to wandb."""
@@ -77,6 +78,29 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, scheduler=None, scal
     
     return checkpoint.get('epoch', 0), checkpoint.get('best_val_accuracy', 0.0)
 
+def distillation_loss(student_logits, teacher_logits, labels, criterion, temp=4.0, alpha=0.5):
+    """
+    Compute the knowledge distillation loss with SCE loss support.
+    
+    Args:
+        student_logits: Output logits from student model
+        teacher_logits: Output logits from teacher model
+        labels: Ground truth labels
+        criterion: Loss function (SCE or regular CE)
+        temp: Temperature for softening probability distributions
+        alpha: Weight for balancing soft and hard targets
+    """
+    # Compute soft targets (KL divergence part)
+    soft_targets = F.softmax(teacher_logits / temp, dim=1)
+    soft_prob = F.log_softmax(student_logits / temp, dim=1)
+    soft_targets_loss = F.kl_div(soft_prob, soft_targets, reduction='batchmean') * (temp * temp)
+    
+    # Compute hard targets using the provided criterion (SCE or CE)
+    hard_loss = criterion(student_logits, labels)
+    
+    # Combine losses
+    return alpha * soft_targets_loss + (1 - alpha) * hard_loss
+
 def train_model(
     model,
     train_loader,
@@ -94,31 +118,19 @@ def train_model(
     num_classes,
     rank=0,
     resume_training=False,
-    load_from_checkpoint=False
+    load_from_checkpoint=False,
+    teacher_model=None,
+    temp=4.0,
+    alpha=0.5,
+    use_sce_loss=False,  # Add flag for SCE loss
 ):
     """
     Train a model with the given parameters and data loaders.
-    
-    Args:
-        model: The PyTorch model to train
-        train_loader: DataLoader for training data
-        val_loader: DataLoader for validation data
-        test_loader: DataLoader for test data
-        criterion: Loss function
-        optimizer: Optimizer
-        device: Device to train on (cuda/cpu)
-        epochs: Number of epochs to train
-        output_dir: Directory to save checkpoints
-        model_name: Name of the model for saving checkpoints
-        net_id: ID of the network architecture
-        num_classes: Number of output classes
-        resume_training: Whether to resume from latest checkpoint with same training state
-        load_from_checkpoint: Whether model was loaded from checkpoint (but starting fresh training)
-        rank: Process rank in distributed training (default: 0)
-    
-    Returns:
-        float: Best validation accuracy achieved
-        float: Test accuracy of the best model
+    Additional args:
+        teacher_model: Optional teacher model for knowledge distillation
+        temp: Temperature parameter for knowledge distillation
+        alpha: Weight balancing factor for distillation loss
+        use_sce_loss: Whether to use SCE loss
     """
     # Initialize best accuracy and start epoch
     print(output_dir)
@@ -192,18 +204,31 @@ def train_model(
             images = images.to(device, memory_format=torch.channels_last, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
             
-            optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
             with autocast('cuda'):
-                outputs = model(images)
-                loss = criterion(outputs, labels)
+                student_outputs = model(images)
+                
+                if teacher_model is not None:
+                    with torch.no_grad():
+                        teacher_outputs = teacher_model(images)
+                    loss = distillation_loss(
+                        student_outputs, 
+                        teacher_outputs, 
+                        labels,
+                        criterion,  # Pass the criterion (SCE or CE)
+                        temp=temp,
+                        alpha=alpha
+                    )
+                else:
+                    loss = criterion(student_outputs, labels)
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
 
             running_loss += loss.detach()
-            _, predicted = torch.max(outputs.data, 1)
+            _, predicted = torch.max(student_outputs.data, 1)
             total_samples += labels.size(0)
             correct_predictions += (predicted == labels).sum()
 
