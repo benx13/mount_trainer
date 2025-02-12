@@ -134,7 +134,40 @@ def main(args):
         if args.teacher_checkpoint:
             print(f"Loading teacher weights from: {args.teacher_checkpoint}")
             checkpoint = torch.load(args.teacher_checkpoint)
-            teacher_model.load_state_dict(checkpoint['model_state_dict'])
+            
+            # Print model structures for debugging
+            if args.local_rank == 0:  # Only print on main process
+                print("\nTeacher Model Structure:")
+                print(teacher_model)
+                print("\nCheckpoint keys:")
+                print(list(checkpoint['model_state_dict'].keys())[:10])  # Print first 10 keys
+                print("...")
+            
+            # Handle potential module prefix differences
+            state_dict = checkpoint['model_state_dict']
+            
+            # Remove 'module.' prefix if it exists in the checkpoint but not in the model
+            if not isinstance(teacher_model, DDP) and list(state_dict.keys())[0].startswith('module.'):
+                state_dict = {k[7:]: v for k, v in state_dict.items()}
+            
+            # Add 'module.' prefix if model is DDP but checkpoint doesn't have it
+            if isinstance(teacher_model, DDP) and not list(state_dict.keys())[0].startswith('module.'):
+                state_dict = {f'module.{k}': v for k, v in state_dict.items()}
+            
+            # Try to load with strict=False first
+            try:
+                missing_keys, unexpected_keys = teacher_model.load_state_dict(state_dict, strict=False)
+                if missing_keys or unexpected_keys:
+                    print("Warning: Some keys didn't match when loading teacher weights:")
+                    if missing_keys:
+                        print(f"Missing keys: {missing_keys}")
+                    if unexpected_keys:
+                        print(f"Unexpected keys: {unexpected_keys}")
+            except Exception as e:
+                print(f"Error loading teacher weights: {e}")
+                print("Attempting to continue without teacher weights...")
+                if args.local_rank == 0:
+                    print("WARNING: Teacher model weights could not be loaded. This might affect performance.")
         
         teacher_model = teacher_model.to(device, memory_format=torch.channels_last)
         teacher_model.eval()  # Set teacher to evaluation mode
